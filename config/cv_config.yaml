@@ -1,0 +1,11 @@
+strategy: time_series_split
+n_splits: 5
+gap: 0
+test_size: 12
+date_column: date
+target_column: outbreak_label
+first_valid_year: 2014
+last_valid_year: 2025
+train_window_years: 5
+skip_single_class_folds: true
+minimum_evaluated_folds: 3

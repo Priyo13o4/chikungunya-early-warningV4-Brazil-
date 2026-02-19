@@ -1,0 +1,153 @@
+{
+  "run_id": "20260219T093417Z-b14844cc",
+  "started_at_utc": "2026-02-19T09:34:17.334623+00:00",
+  "effective_seed": 42,
+  "model_config_path": "config/model_config.yaml",
+  "adapter_config_path": "projects/brazil_chik/config.yaml",
+  "cv_config_path": "config/cv_config.yaml",
+  "effective_cv_config": {
+    "strategy": "time_series_split",
+    "n_splits": 5,
+    "gap": 0,
+    "test_size": 12,
+    "date_column": "date",
+    "target_column": "outbreak_label",
+    "first_valid_year": 2014,
+    "last_valid_year": 2025,
+    "train_window_years": 5,
+    "skip_single_class_folds": true,
+    "minimum_evaluated_folds": 3,
+    "start_train_year": 2009,
+    "thesis_strict": false
+  },
+  "adapter": {
+    "enabled": true,
+    "callables": {
+      "load_data": "projects.brazil_chik.data_adapter:run",
+      "label_outbreaks": "projects.brazil_chik.label_adapter:label_outbreaks",
+      "build_feature_matrix": "projects.brazil_chik.feature_adapter:build_feature_matrix",
+      "build_fold_ledger": "projects.brazil_chik.cv_adapter:build_fold_ledger",
+      "generate_time_splits": "projects.brazil_chik.cv_adapter:generate_time_splits"
+    },
+    "brazil_adapter_active": true
+  },
+  "bayesian_mode_control": {
+    "force_full_requested": true,
+    "force_full_effective": true,
+    "brazil_adapter_active": true,
+    "bayesian_simplified_mode": false,
+    "max_convergence_retries": 0
+  },
+  "compute_backend": {
+    "configured": true,
+    "requested": {
+      "mode": "cpu",
+      "prefer_gpu_for": "both",
+      "fallback": "cpu",
+      "configured": true
+    },
+    "effective": {
+      "baseline_backend": "cpu",
+      "bayesian_backend": "cpu"
+    },
+    "baseline_backend": "cpu",
+    "bayesian_backend": "cpu",
+    "fallback": "cpu",
+    "fallback_used": false,
+    "reason_logs": [],
+    "capabilities": {
+      "macos_metal": true,
+      "nvidia_cuda": false,
+      "details": {
+        "platform": "Darwin",
+        "macos_metal": {
+          "platform": "Darwin",
+          "probes": [
+            {
+              "source": "xcrun -f metal",
+              "returncode": 0,
+              "stdout": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"
+            }
+          ]
+        },
+        "nvidia_cuda": {
+          "probes": []
+        }
+      }
+    },
+    "tracks": {
+      "baseline": {
+        "track": "baseline",
+        "requested_mode": "cpu",
+        "gpu_preferred_for_track": true,
+        "effective_backend": "cpu",
+        "fallback_backend": "cpu",
+        "fallback_used": false,
+        "reason_logs": []
+      },
+      "bayesian": {
+        "track": "bayesian",
+        "requested_mode": "cpu",
+        "gpu_preferred_for_track": true,
+        "effective_backend": "cpu",
+        "fallback_backend": "cpu",
+        "fallback_used": false,
+        "reason_logs": []
+      }
+    }
+  },
+  "memory_optimization": {
+    "mode": "off",
+    "train_year_window": null,
+    "district_shard_count": null,
+    "district_shard_index": null,
+    "bayesian_subset": {
+      "enabled": false,
+      "max_rows": 0,
+      "strategy": "recent_years"
+    },
+    "active": false,
+    "rows_before": 289276,
+    "rows_after": 289276
+  },
+  "reproducibility": {
+    "effective_cli_args": {
+      "model_config": "config/model_config.yaml",
+      "adapter_config": "projects/brazil_chik/config.yaml",
+      "cv_config": "config/cv_config.yaml",
+      "raw_data": "data/raw/Epiclim_Final_data.csv",
+      "population_data": null,
+      "start_year": 2020,
+      "end_year": 2020,
+      "selected_percentile": 75,
+      "skip_baselines": true,
+      "skip_bayesian": false,
+      "skip_visualizations": true,
+      "decision_cost": 0.2,
+      "decision_loss": 1.0,
+      "lead_time_max_lookback_steps": 8,
+      "strict_bayesian_deps": false,
+      "strict_feature_gate": false,
+      "bayesian_draws": 10,
+      "bayesian_tune": 10,
+      "bayesian_chains": 1,
+      "bayesian_target_accept": null,
+      "bayesian_max_treedepth": null,
+      "bayesian_progress": true,
+      "bayesian_simplified_mode": true,
+      "force_full_bayesian": false,
+      "export_detailed_csv": false,
+      "model_names": null,
+      "log_level": "INFO",
+      "seed": null
+    },
+    "git_commit_sha": null,
+    "python_version": "3.14.3 (main, Feb  3 2026, 15:32:20) [Clang 17.0.0 (clang-1700.6.3.2)]",
+    "input_hashes_sha256": {
+      "raw_data": "e9af9376881e47e0f479357b7757b6f286f729f8efe7d5b6e95b9fe5ebd0243f",
+      "model_config": "5acb58cd60bd542bf4dc6e074c0e72d0dd45bc6beecf5f60049923170ce3dee2",
+      "adapter_config": "531dd8a3a14ffa4d7f48e80a97ee985c8a10a420ee9f72f66cfaa9f580bc1ab8",
+      "cv_config": "1ed94638da7008fbe8558497be172feb23e622cf138ab49c353a709f7c43422e"
+    }
+  }
+}

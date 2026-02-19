@@ -1,0 +1,522 @@
+from __future__ import annotations
+
+import inspect
+import logging
+from pathlib import Path
+from typing import Any, Callable
+
+import numpy as np
+import pandas as pd
+
+from src.models.baselines.cv_splitter import TimeSeriesCVConfig, generate_time_splits
+from src.pipeline_runtime.config_runtime import build_bayesian_config
+from src.pipeline_runtime.io_artifacts import build_suppressed_metric_payload
+from src.pipeline_runtime.phase_context import BayesianPhaseResult, SharedPhaseState
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _select_bayesian_subset_index(
+    *,
+    model_input_df: pd.DataFrame,
+    target: pd.Series,
+    bayesian_count_target: pd.Series,
+    config: dict[str, Any],
+    seed: int,
+    date_column: str = "date",
+) -> tuple[pd.Index, dict[str, Any]]:
+    normalized: dict[str, Any] = config if isinstance(config, dict) else {}
+    enabled = bool(normalized.get("enabled", False))
+    max_rows = int(normalized.get("max_rows", 0) or 0)
+    strategy = str(normalized.get("strategy", "recent_years")).strip().lower()
+    if strategy not in {"recent_years", "top_cases", "random_stratified"}:
+        strategy = "recent_years"
+
+    full_index = pd.Index(model_input_df.index)
+    metadata = {
+        "enabled": enabled,
+        "strategy": strategy,
+        "max_rows": int(max_rows),
+        "source_rows": int(len(full_index)),
+        "selected_rows": int(len(full_index)),
+        "selection_seed": int(seed),
+        "selection_reproducibility_key": f"strategy={strategy}|max_rows={max_rows}|seed={seed}",
+        "applied": False,
+    }
+
+    if not enabled or max_rows <= 0 or len(full_index) <= max_rows:
+        return full_index, metadata
+
+    if strategy == "top_cases":
+        scores = pd.to_numeric(bayesian_count_target, errors="coerce").fillna(0.0)
+        selected_index = scores.sort_values(ascending=False).head(max_rows).index
+    elif strategy == "random_stratified":
+        rng = np.random.default_rng(int(seed))
+        y = pd.to_numeric(target, errors="coerce").fillna(0).astype(int)
+        y = y.reindex(full_index)
+        candidates = pd.Series(index=full_index, data=False, dtype="bool")
+        class_values = sorted(int(value) for value in y.dropna().unique())
+        allocated = 0
+        for class_value in class_values:
+            class_idx = y.index[y == class_value]
+            if len(class_idx) == 0:
+                continue
+            share = max(1, int(round(max_rows * (len(class_idx) / max(len(full_index), 1)))))
+            share = min(share, len(class_idx))
+            sampled = rng.choice(np.asarray(class_idx), size=int(share), replace=False)
+            candidates.loc[pd.Index(sampled)] = True
+            allocated += int(share)
+        if allocated < max_rows:
+            remaining_pool = candidates.index[~candidates]
+            if len(remaining_pool) > 0:
+                top_up = min(max_rows - allocated, len(remaining_pool))
+                sampled = rng.choice(np.asarray(remaining_pool), size=int(top_up), replace=False)
+                candidates.loc[pd.Index(sampled)] = True
+        selected_index = candidates[candidates].index[:max_rows]
+    else:
+        if date_column in model_input_df.columns:
+            ordering = pd.to_datetime(model_input_df[date_column], errors="coerce")
+        else:
+            ordering = pd.Series(np.arange(len(full_index)), index=full_index, dtype="float64")
+        selected_index = ordering.sort_values(ascending=False).head(max_rows).index
+
+    selected_index = pd.Index(selected_index)
+    metadata.update(
+        {
+            "applied": True,
+            "selected_rows": int(len(selected_index)),
+            "coverage": float(len(selected_index) / max(len(full_index), 1)),
+        }
+    )
+    return selected_index, metadata
+
+
+def run_bayesian_track(
+    features_df: pd.DataFrame,
+    count_target: pd.Series,
+    *,
+    outbreak_threshold: pd.Series | None,
+    strict_dependencies: bool,
+    bayesian_settings: dict[str, Any],
+    compute_backend_requested: str = "cpu",
+    compute_backend_effective: str = "cpu",
+) -> tuple[pd.DataFrame | None, Any | None, dict[str, Any]]:
+    backend_requested = str(compute_backend_requested or "cpu")
+    backend_effective = str(compute_backend_effective or "cpu")
+    bayesian_runtime_backend = "cpu"
+    backend_fallback_reason: str | None = None
+    if backend_effective != "cpu":
+        backend_fallback_reason = (
+            f"Bayesian implementation does not currently support '{backend_effective}' execution; using CPU runtime path"
+        )
+        LOGGER.warning("%s", backend_fallback_reason)
+
+    try:
+        from src.models.bayesian.hierarchical_model import BayesianModelConfig, HierarchicalBayesianModel
+
+        config = build_bayesian_config(strict_dependencies, bayesian_settings)
+
+        if config.force_full_bayesian:
+            config = BayesianModelConfig(
+                **{
+                    **config.__dict__,
+                    "bayesian_simplified_mode": False,
+                    "max_convergence_retries": 0,
+                }
+            )
+            LOGGER.info("Bayesian mode request: full latent AR only (simplified fallback disabled).")
+
+        bayesian_model = HierarchicalBayesianModel(config=config).fit(features_df, count_target)
+        risk_frame, predictive_metadata = bayesian_model.predict_with_uncertainty(
+            features_df,
+            outbreak_threshold=outbreak_threshold,
+        )
+        fallback_used = bool(float(bayesian_model.diagnostics_summary_.get("fallback", 0.0)) > 0.0)
+        mode_used = "fallback" if fallback_used else ("simplified" if bayesian_model.simplified_used_ else "full_latent_ar")
+        diagnostics = {
+            "simplified_mode": bool(bayesian_model.simplified_used_),
+            "force_full_bayesian": bool(config.force_full_bayesian),
+            "mode_used": mode_used,
+            "fallback_used": fallback_used,
+            "degraded_mode": bool(predictive_metadata.get("degraded_mode", False) or fallback_used),
+            "compute_backend_requested": backend_requested,
+            "compute_backend_effective": backend_effective,
+            "compute_backend_runtime": bayesian_runtime_backend,
+            "compute_backend_fallback_used": bool(backend_fallback_reason is not None),
+            "compute_backend_fallback_reason": backend_fallback_reason,
+            "target_semantics": "count_likelihood",
+            "target_column_used": "cases",
+            "risk_summary_columns": ["risk_mean", "risk_q05", "risk_q95", "threshold_cases"],
+            **predictive_metadata,
+            **bayesian_model.diagnostics_summary_,
+        }
+        return risk_frame, bayesian_model.idata_, diagnostics
+    except ImportError as import_error:
+        LOGGER.warning("Skipping Bayesian phase due to missing optional dependencies: %s", import_error)
+        if strict_dependencies:
+            raise
+        return None, None, {
+            "degraded_mode": True,
+            "fallback_used": True,
+            "mode_used": "missing_dependencies",
+            "degraded_reason": "missing_optional_dependencies",
+            "error": str(import_error),
+            "compute_backend_requested": backend_requested,
+            "compute_backend_effective": backend_effective,
+            "compute_backend_runtime": bayesian_runtime_backend,
+            "compute_backend_fallback_used": bool(backend_fallback_reason is not None),
+            "compute_backend_fallback_reason": backend_fallback_reason,
+        }
+
+
+def collect_bayesian_oof_scores(
+    *,
+    features_df: pd.DataFrame,
+    outbreak_target: pd.Series,
+    count_target: pd.Series,
+    strict_dependencies: bool,
+    bayesian_settings: dict[str, Any],
+    cv_config: TimeSeriesCVConfig,
+    threshold_series: pd.Series | None = None,
+    fail_on_error: bool = False,
+    date_column: str = "date",
+    target_column: str = "outbreak_label",
+    generate_time_splits_fn: Callable[[pd.DataFrame, TimeSeriesCVConfig], Any] = generate_time_splits,
+) -> pd.Series:
+    from src.models.bayesian.hierarchical_model import HierarchicalBayesianModel
+
+    oof = pd.Series(np.nan, index=features_df.index, dtype="float64")
+
+    cv_frame = features_df.copy()
+    cv_frame[target_column] = pd.to_numeric(outbreak_target, errors="coerce").fillna(0).astype(int)
+    cv_config = TimeSeriesCVConfig(
+        date_column=cv_config.date_column or date_column,
+        target_column=cv_config.target_column or target_column,
+        start_train_year=cv_config.start_train_year,
+        first_valid_year=cv_config.first_valid_year,
+        last_valid_year=cv_config.last_valid_year,
+        train_window_years=cv_config.train_window_years,
+        thesis_strict=getattr(cv_config, "thesis_strict", False),
+        skip_single_class_folds=cv_config.skip_single_class_folds,
+        minimum_evaluated_folds=cv_config.minimum_evaluated_folds,
+    )
+
+    for train_idx, valid_idx in generate_time_splits_fn(cv_frame, cv_config):
+        y_train_binary = pd.to_numeric(outbreak_target.loc[train_idx], errors="coerce").fillna(0).astype(int)
+        y_train_counts = pd.to_numeric(count_target.loc[train_idx], errors="coerce").fillna(0.0)
+        if y_train_binary.nunique(dropna=True) <= 1:
+            continue
+        try:
+            model = HierarchicalBayesianModel(config=build_bayesian_config(strict_dependencies, bayesian_settings))
+            model.fit(features_df.loc[train_idx], y_train_counts)
+            fold_threshold = threshold_series.loc[valid_idx] if threshold_series is not None else None
+            fold_pred = model.predict_with_uncertainty(
+                features_df.loc[valid_idx],
+                outbreak_threshold=fold_threshold,
+            )[0]["risk_mean"].clip(0.0, 1.0)
+            oof.loc[valid_idx] = fold_pred.astype(float)
+        except Exception as fold_error:
+            if fail_on_error:
+                raise RuntimeError(f"Bayesian OOF fold failed under strict/full mode: {fold_error}") from fold_error
+            LOGGER.warning("Bayesian OOF fold skipped due to error: %s", fold_error)
+
+    return oof
+
+
+def run_bayesian_phase(
+    *,
+    state: SharedPhaseState,
+    paths: Any,
+    model_input_df: pd.DataFrame,
+    target: pd.Series,
+    bayesian_count_target: pd.Series,
+    bayesian_threshold_series: pd.Series,
+    temporal_index: pd.Series | None,
+    district_index: pd.Series | None,
+    skip_bayesian: bool,
+    strict_bayesian_deps: bool,
+    bayesian_settings: dict[str, Any],
+    bayesian_compute_backend_requested: str,
+    bayesian_compute_backend_effective: str,
+    effective_cv_config: TimeSeriesCVConfig,
+    lead_time_max_lookback_steps: int,
+    export_detailed_csv: bool,
+    strict_or_full_bayesian_mode: bool,
+    bayesian_subset_config: dict[str, Any],
+    bayesian_subset_seed: int,
+    cv_split_callable: Callable[..., Any],
+    run_bayesian_track_fn: Callable[..., tuple[pd.DataFrame | None, Any | None, dict[str, Any]]],
+    collect_bayesian_oof_scores_fn: Callable[..., pd.Series],
+    evaluate_bayesian_predictions_fn: Callable[..., dict[str, float]],
+    check_convergence_fn: Callable[..., dict[str, Any]],
+    extract_rhat_ess_fn: Callable[..., pd.DataFrame],
+    safe_write_json_fn: Callable[[dict[str, Any], Path], None],
+) -> BayesianPhaseResult:
+    LOGGER.info("Phase: bayesian")
+    bayesian_score: pd.Series | None = None
+    bayesian_risk_frame: pd.DataFrame | None = None
+    bayesian_oof_score: pd.Series | None = None
+    bayesian_idata: Any | None = None
+    bayesian_sampling_diagnostics: dict[str, Any] = {}
+    bayesian_metrics: dict[str, float] | None = None
+    bayesian_metrics_fullfit: dict[str, float] | None = None
+    bayesian_headline_eligible = False
+    bayesian_convergence_payload: dict[str, Any] | None = None
+    bayesian_converged: bool | None = None
+
+    if not skip_bayesian:
+        subset_index, subset_metadata = _select_bayesian_subset_index(
+            model_input_df=model_input_df,
+            target=target,
+            bayesian_count_target=bayesian_count_target,
+            config=bayesian_subset_config,
+            seed=int(bayesian_subset_seed),
+            date_column=effective_cv_config.date_column or "date",
+        )
+        subset_model_input_df = model_input_df.loc[subset_index]
+        subset_target = target.loc[subset_index]
+        subset_count_target = bayesian_count_target.loc[subset_index]
+        subset_threshold_series = bayesian_threshold_series.loc[subset_index]
+
+        bayes_track_kwargs: dict[str, Any] = {
+            "outbreak_threshold": subset_threshold_series,
+            "strict_dependencies": strict_bayesian_deps,
+            "bayesian_settings": bayesian_settings,
+        }
+        bayes_track_signature = inspect.signature(run_bayesian_track_fn)
+        if "compute_backend_requested" in bayes_track_signature.parameters:
+            bayes_track_kwargs["compute_backend_requested"] = bayesian_compute_backend_requested
+        if "compute_backend_effective" in bayes_track_signature.parameters:
+            bayes_track_kwargs["compute_backend_effective"] = bayesian_compute_backend_effective
+
+        bayesian_risk_frame, bayesian_idata, bayesian_sampling_diagnostics = run_bayesian_track_fn(
+            subset_model_input_df,
+            subset_count_target,
+            **bayes_track_kwargs,
+        )
+        bayesian_sampling_diagnostics["bayesian_subset"] = subset_metadata
+        if "compute_backend_requested" not in bayesian_sampling_diagnostics:
+            bayesian_sampling_diagnostics["compute_backend_requested"] = str(bayesian_compute_backend_requested)
+        if "compute_backend_effective" not in bayesian_sampling_diagnostics:
+            bayesian_sampling_diagnostics["compute_backend_effective"] = str(bayesian_compute_backend_effective)
+        if "compute_backend_runtime" not in bayesian_sampling_diagnostics:
+            bayesian_sampling_diagnostics["compute_backend_runtime"] = "cpu"
+        if "compute_backend_fallback_used" not in bayesian_sampling_diagnostics:
+            bayesian_sampling_diagnostics["compute_backend_fallback_used"] = bool(
+                str(bayesian_sampling_diagnostics.get("compute_backend_effective", "cpu")) != "cpu"
+            )
+        if "compute_backend_fallback_reason" not in bayesian_sampling_diagnostics:
+            bayesian_sampling_diagnostics["compute_backend_fallback_reason"] = (
+                "Bayesian implementation currently runs on CPU"
+                if bool(bayesian_sampling_diagnostics.get("compute_backend_fallback_used", False))
+                else None
+            )
+        if bool(bayesian_sampling_diagnostics.get("degraded_mode", False)):
+            state.degraded_reasons.append(
+                {
+                    "code": "bayesian_degraded_mode",
+                    "mode_used": str(bayesian_sampling_diagnostics.get("mode_used", "unknown")),
+                    "reason": str(bayesian_sampling_diagnostics.get("degraded_reason", "degraded_mode")),
+                }
+            )
+        if bayesian_risk_frame is not None and not bayesian_risk_frame.empty:
+            bayesian_subset_score = pd.to_numeric(bayesian_risk_frame["risk_mean"], errors="coerce").fillna(0.0).clip(0.0, 1.0)
+            bayesian_score = pd.Series(0.0, index=model_input_df.index, dtype="float64")
+            assign_count = min(len(subset_index), len(bayesian_subset_score))
+            if assign_count < len(subset_index):
+                LOGGER.warning(
+                    "Bayesian subset prediction count (%d) differs from subset rows (%d); truncating assignment",
+                    len(bayesian_subset_score),
+                    len(subset_index),
+                )
+            bayesian_score.loc[subset_index[:assign_count]] = bayesian_subset_score.iloc[:assign_count].to_numpy(dtype=float)
+
+            risk_intervals_path = paths.outputs_metrics / "bayesian_risk_intervals.csv"
+            bayesian_risk_frame.to_csv(risk_intervals_path, index=False)
+            state.artifacts["bayesian_risk_intervals"] = risk_intervals_path
+
+            if export_detailed_csv:
+                bayesian_path = paths.outputs_models / "detailed" / "bayesian_risk.csv"
+                bayesian_path.parent.mkdir(parents=True, exist_ok=True)
+                bayesian_risk_frame.to_csv(bayesian_path, index=False)
+                state.artifacts["bayesian_risk"] = bayesian_path
+
+            bayesian_metrics_fullfit = evaluate_bayesian_predictions_fn(
+                subset_target,
+                bayesian_subset_score,
+                max_lookback_steps=lead_time_max_lookback_steps,
+                temporal_index=temporal_index.loc[subset_index] if temporal_index is not None else None,
+                district=district_index.loc[subset_index] if district_index is not None else None,
+            )
+            safe_write_json_fn(bayesian_metrics_fullfit, paths.outputs_metrics / "bayesian_metrics_fullfit.json")
+            state.artifacts["bayesian_metrics_fullfit"] = paths.outputs_metrics / "bayesian_metrics_fullfit.json"
+
+            if not bool(bayesian_sampling_diagnostics.get("degraded_mode", False)):
+                bayes_oof_kwargs: dict[str, Any] = {
+                    "features_df": subset_model_input_df,
+                    "outbreak_target": subset_target,
+                    "count_target": subset_count_target,
+                    "strict_dependencies": strict_bayesian_deps,
+                    "bayesian_settings": bayesian_settings,
+                    "cv_config": effective_cv_config,
+                    "threshold_series": subset_threshold_series,
+                    "fail_on_error": strict_or_full_bayesian_mode,
+                }
+                if "generate_time_splits_fn" in inspect.signature(collect_bayesian_oof_scores_fn).parameters:
+                    bayes_oof_kwargs["generate_time_splits_fn"] = cv_split_callable
+                bayesian_oof_subset = collect_bayesian_oof_scores_fn(**bayes_oof_kwargs)
+                bayesian_oof_score = pd.Series(np.nan, index=model_input_df.index, dtype="float64")
+                bayesian_oof_score.loc[bayesian_oof_subset.index] = bayesian_oof_subset.astype(float).to_numpy()
+                valid_bayes_oof_mask = bayesian_oof_score.notna()
+                if valid_bayes_oof_mask.any():
+                    bayesian_metrics = evaluate_bayesian_predictions_fn(
+                        target.loc[valid_bayes_oof_mask],
+                        bayesian_oof_score.loc[valid_bayes_oof_mask],
+                        max_lookback_steps=lead_time_max_lookback_steps,
+                        temporal_index=temporal_index.loc[valid_bayes_oof_mask] if temporal_index is not None else None,
+                        district=district_index.loc[valid_bayes_oof_mask] if district_index is not None else None,
+                    )
+                    safe_write_json_fn(bayesian_metrics, paths.outputs_metrics / "bayesian_metrics.json")
+                    state.artifacts["bayesian_metrics"] = paths.outputs_metrics / "bayesian_metrics.json"
+                    bayesian_headline_eligible = True
+                else:
+                    LOGGER.warning("No Bayesian OOF predictions available; headline Bayesian metrics not produced.")
+                    state.degraded_reasons.append({"code": "bayesian_no_oof_predictions"})
+            else:
+                LOGGER.warning("Bayesian track is in degraded/fallback mode; headline Bayesian OOF metrics suppressed.")
+
+            if bayesian_idata is not None:
+                bayesian_diag_dir = paths.outputs_models / "bayesian" / "diagnostics"
+                bayesian_diag_dir.mkdir(parents=True, exist_ok=True)
+
+                convergence = check_convergence_fn(
+                    bayesian_idata,
+                    divergence_threshold=float(bayesian_settings.get("divergence_warn_threshold", 0.0)),
+                    rhat_threshold=float(bayesian_settings.get("rhat_warn_threshold", 1.05)),
+                    ess_threshold=float(bayesian_settings.get("ess_warn_threshold", 200.0)),
+                    max_tree_depth_threshold=float(bayesian_settings.get("max_treedepth", 12)),
+                )
+                convergence.update(
+                    {
+                        "simplified_mode": bool(bayesian_sampling_diagnostics.get("simplified_mode", False)),
+                        "mode_used": str(bayesian_sampling_diagnostics.get("mode_used", "unknown")),
+                        "force_full_bayesian": bool(bayesian_sampling_diagnostics.get("force_full_bayesian", False)),
+                        "fallback_used": bool(bayesian_sampling_diagnostics.get("fallback_used", False)),
+                        "degraded_mode": bool(bayesian_sampling_diagnostics.get("degraded_mode", False)),
+                        "threshold_basis": str(bayesian_sampling_diagnostics.get("threshold_basis", "default")),
+                        "threshold_column": bayesian_sampling_diagnostics.get("threshold_column"),
+                        "threshold_default": float(bayesian_sampling_diagnostics.get("threshold_default", 1.0)),
+                        "configured_draws": int(bayesian_settings.get("draws", 0)),
+                        "configured_tune": int(bayesian_settings.get("tune", 0)),
+                        "configured_chains": int(bayesian_settings.get("chains", 0)),
+                        "configured_bayesian_progress": bool(bayesian_settings.get("bayesian_progress", True)),
+                        "configured_target_accept": float(bayesian_settings.get("target_accept", 0.0)),
+                        "configured_max_treedepth": int(bayesian_settings.get("max_treedepth", 0)),
+                        "compute_backend_requested": str(
+                            bayesian_sampling_diagnostics.get("compute_backend_requested", "cpu")
+                        ),
+                        "compute_backend_effective": str(
+                            bayesian_sampling_diagnostics.get("compute_backend_effective", "cpu")
+                        ),
+                        "compute_backend_runtime": str(
+                            bayesian_sampling_diagnostics.get("compute_backend_runtime", "cpu")
+                        ),
+                        "compute_backend_fallback_used": bool(
+                            bayesian_sampling_diagnostics.get("compute_backend_fallback_used", False)
+                        ),
+                        "compute_backend_fallback_reason": bayesian_sampling_diagnostics.get(
+                            "compute_backend_fallback_reason"
+                        ),
+                    }
+                )
+                safe_write_json_fn(convergence, bayesian_diag_dir / "convergence.json")
+                bayesian_convergence_payload = convergence
+                state.artifacts["bayesian_convergence"] = bayesian_diag_dir / "convergence.json"
+
+                mode_artifact = {
+                    "requested_mode": "full_latent_ar"
+                    if bool(bayesian_settings.get("force_full_bayesian", False))
+                    else ("simplified" if bool(bayesian_settings.get("bayesian_simplified_mode", False)) else "auto"),
+                    "used_mode": str(convergence.get("mode_used", "unknown")),
+                    "force_full_bayesian": bool(convergence.get("force_full_bayesian", False)),
+                    "simplified_mode": bool(convergence.get("simplified_mode", False)),
+                    "fallback_used": bool(convergence.get("fallback_used", False)),
+                    "degraded_mode": bool(convergence.get("degraded_mode", False)),
+                    "threshold_basis": str(convergence.get("threshold_basis", "default")),
+                    "threshold_column": convergence.get("threshold_column"),
+                    "threshold_default": float(convergence.get("threshold_default", 1.0)),
+                }
+                safe_write_json_fn(mode_artifact, bayesian_diag_dir / "mode.json")
+                state.artifacts["bayesian_mode"] = bayesian_diag_dir / "mode.json"
+
+                if not convergence.get("converged", False):
+                    bayesian_converged = False
+                    state.degraded_reasons.append(
+                        {
+                            "code": "bayesian_convergence_failed",
+                            "mode_used": str(convergence.get("mode_used", "unknown")),
+                            "reason": "convergence_not_met",
+                        }
+                    )
+                    if strict_or_full_bayesian_mode:
+                        raise RuntimeError("Bayesian convergence check failed under strict/full mode")
+                    bayesian_headline_eligible = False
+                    bayesian_metrics = build_suppressed_metric_payload(
+                        run_id=state.run_id,
+                        track="bayesian_oof",
+                        reason="bayesian_convergence_not_met",
+                    )
+                    safe_write_json_fn(bayesian_metrics, paths.outputs_metrics / "bayesian_metrics.json")
+                    state.artifacts["bayesian_metrics"] = paths.outputs_metrics / "bayesian_metrics.json"
+                    LOGGER.warning(
+                        "Bayesian convergence warning: divergences=%.0f, max_tree_depth=%.0f, r_hat_max=%.4f, ess_min=%.1f",
+                        convergence["divergences"],
+                        convergence["max_tree_depth"],
+                        convergence["r_hat_max"],
+                        convergence["ess_min"],
+                    )
+                else:
+                    bayesian_converged = True
+
+                try:
+                    diagnostics_frame = extract_rhat_ess_fn(bayesian_idata)
+                    diagnostics_csv_path = bayesian_diag_dir / "rhat_ess.csv"
+                    diagnostics_frame.to_csv(diagnostics_csv_path, index=False)
+                    state.artifacts["bayesian_rhat_ess"] = diagnostics_csv_path
+                except ImportError as diagnostics_error:
+                    LOGGER.warning("Unable to export detailed Bayesian diagnostics: %s", diagnostics_error)
+    else:
+        LOGGER.info("Bayesian phase skipped by flag")
+
+    bayesian_metrics_fullfit_path = paths.outputs_metrics / "bayesian_metrics_fullfit.json"
+    if bayesian_metrics_fullfit is None:
+        bayesian_metrics_fullfit = build_suppressed_metric_payload(
+            run_id=state.run_id,
+            track="bayesian_fullfit",
+            reason="bayesian_not_available",
+        )
+        safe_write_json_fn(bayesian_metrics_fullfit, bayesian_metrics_fullfit_path)
+    state.artifacts["bayesian_metrics_fullfit"] = bayesian_metrics_fullfit_path
+
+    bayesian_metrics_path = paths.outputs_metrics / "bayesian_metrics.json"
+    if bayesian_metrics is None:
+        bayesian_metrics = build_suppressed_metric_payload(
+            run_id=state.run_id,
+            track="bayesian_oof",
+            reason="bayesian_headline_not_available",
+        )
+        safe_write_json_fn(bayesian_metrics, bayesian_metrics_path)
+    state.artifacts["bayesian_metrics"] = bayesian_metrics_path
+
+    return BayesianPhaseResult(
+        bayesian_score=bayesian_score,
+        bayesian_risk_frame=bayesian_risk_frame,
+        bayesian_oof_score=bayesian_oof_score,
+        bayesian_idata=bayesian_idata,
+        bayesian_sampling_diagnostics=bayesian_sampling_diagnostics,
+        bayesian_metrics=bayesian_metrics,
+        bayesian_metrics_fullfit=bayesian_metrics_fullfit,
+        bayesian_headline_eligible=bayesian_headline_eligible,
+        bayesian_convergence_payload=bayesian_convergence_payload,
+        bayesian_converged=bayesian_converged,
+    )

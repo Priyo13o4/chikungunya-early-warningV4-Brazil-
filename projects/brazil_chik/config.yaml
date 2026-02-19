@@ -1,0 +1,12 @@
+adapter:
+  load_data: projects.brazil_chik.data_adapter:run
+  label_outbreaks: projects.brazil_chik.label_adapter:label_outbreaks
+  build_feature_matrix: projects.brazil_chik.feature_adapter:build_feature_matrix
+  build_fold_ledger: projects.brazil_chik.cv_adapter:build_fold_ledger
+  generate_time_splits: projects.brazil_chik.cv_adapter:generate_time_splits
+  force_full_bayesian_project_only: true
+
+bayesian_model:
+  force_full_bayesian: true
+  bayesian_simplified_mode: false
+  max_convergence_retries: 0

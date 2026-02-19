@@ -1,0 +1,8 @@
+{
+  "run_id": "20260219T093417Z-b14844cc",
+  "passed": false,
+  "strict_mode": false,
+  "flagged_features": [],
+  "dropped_features": [],
+  "note": "feature quality gate report was not emitted by feature pipeline"
+}

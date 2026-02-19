@@ -1,0 +1,57 @@
+random_seed: 42
+
+compute_backend:
+  # mode: auto|cpu|macos_metal|nvidia_cuda
+  mode: cpu
+  # prefer_gpu_for: baselines|bayesian|both
+  prefer_gpu_for: both
+  fallback: cpu
+
+baseline_models:
+  - rule_based_threshold
+  - logistic_regression
+  - poisson_regression
+  - negative_binomial_regression
+  - random_forest
+  - xgboost
+  - lightgbm
+bayesian_model:
+  name: hierarchical_poisson
+  draws: 800
+  tune: 1200
+  chains: 2
+  bayesian_progress: true
+  target_accept: 0.99
+  max_treedepth: 14
+  force_full_bayesian: false
+  bayesian_simplified_mode: false
+  max_convergence_retries: 1
+  divergence_warn_threshold: 25
+  rhat_warn_threshold: 1.05
+  ess_warn_threshold: 200.0
+  outbreak_threshold_default_cases: 1.0
+  posterior_sample_cap: 400
+
+memory_optimization:
+  mode: off
+  train_year_window: null
+  district_shard_count: null
+  district_shard_index: null
+  bayesian_subset:
+    enabled: false
+    max_rows: 0
+    strategy: recent_years
+
+decision:
+  policy_version: v1
+  optimize_threshold: true
+  optimization_risk_basis: bayesian_oof_risk_mean
+  optimization_min_samples: 100
+  optimization_grid_size: 101
+  optimization_grid_min: 0.0
+  optimization_grid_max: 1.0
+  risk_score_basis: bayesian_oof_risk_mean
+  alert_thresholds:
+    yellow: 0.3
+    orange: 0.5
+    red: 0.7

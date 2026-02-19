@@ -1,0 +1,2 @@
+model,accuracy,precision,recall,f1,kappa,false_alarm_rate,roc_auc,pr_auc,lead_time_mean,lead_time_utility
+logistic_regression,12.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0

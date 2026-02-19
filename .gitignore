@@ -1,0 +1,83 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+resources/.venv/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# PyCharm/IntelliJ
+.idea/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Jupyter
+.ipynb_checkpoints
+
+# Python virtualenv and cache
+.mypy_cache/
+.pyre/
+.cache/
+
+# Logs and temporary files
+*.log
+*.tmp
+temp/
+tmp/
+
+# Sensitive files
+.env
+*.pem
+*.key
+secrets/
+
+# Data and generated outputs (do not track large or derived files)
+/data/raw/
+/data/processed/
+/data/external/
+/data/features/
+/outputs/models/
+
+# Saved models and training artifacts
+/models/
+/outputs/models/
+
+# Compiled extensions
+*.so
+*.dylib
+
+# Wheel files
+*.whl
+
+# Misc
+*.bak
+*.swp
