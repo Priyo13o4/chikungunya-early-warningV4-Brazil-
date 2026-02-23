@@ -27,6 +27,8 @@ def run_evaluation_and_decision_phase(
     bayesian_oof_score: pd.Series | None,
     baseline_oof_score: pd.Series | None,
     bayesian_sampling_diagnostics: dict[str, Any],
+    bayesian_profile_usage: dict[str, Any],
+    cv_subset_mode_active: bool,
     bayesian_convergence_payload: dict[str, Any] | None,
     bayesian_converged: bool | None,
     temporal_index: pd.Series | None,
@@ -222,6 +224,27 @@ def run_evaluation_and_decision_phase(
             "mode_used": str(bayesian_sampling_diagnostics.get("mode_used", "not_run")),
             "fallback_used": bool(bayesian_sampling_diagnostics.get("fallback_used", False)),
             "degraded_mode": bool(bayesian_sampling_diagnostics.get("degraded_mode", False)),
+            "convergence_failure_mode": str(bayesian_sampling_diagnostics.get("convergence_failure_mode", "warn")),
+            "convergence_failure_mode_explicit": bool(
+                bayesian_sampling_diagnostics.get("convergence_failure_mode_explicit", False)
+            ),
+            "convergence_failure_mode_auto_reason": bayesian_sampling_diagnostics.get(
+                "convergence_failure_mode_auto_reason"
+            ),
+            "requested_backend": str(bayesian_sampling_diagnostics.get("requested_backend", "cpu")),
+            "resolved_backend": str(bayesian_sampling_diagnostics.get("resolved_backend", "cpu")),
+            "actual_runtime_backend": str(bayesian_sampling_diagnostics.get("actual_runtime_backend", "cpu")),
+            "backend_implemented": bool(bayesian_sampling_diagnostics.get("backend_implemented", True)),
+            "fallback_reason": bayesian_sampling_diagnostics.get("fallback_reason"),
+            "sampling_backend_requested": str(
+                bayesian_sampling_diagnostics.get("sampling_backend_requested", "auto")
+            ),
+            "sampling_backend_effective": str(
+                bayesian_sampling_diagnostics.get("sampling_backend_effective", "pymc")
+            ),
+            "sampling_backend_fallback_reason": bayesian_sampling_diagnostics.get(
+                "sampling_backend_fallback_reason"
+            ),
             "compute_backend_requested": str(bayesian_sampling_diagnostics.get("compute_backend_requested", "cpu")),
             "compute_backend_effective": str(bayesian_sampling_diagnostics.get("compute_backend_effective", "cpu")),
             "compute_backend_runtime": str(bayesian_sampling_diagnostics.get("compute_backend_runtime", "cpu")),
@@ -238,6 +261,10 @@ def run_evaluation_and_decision_phase(
                 "method": str(threshold_opt_payload.get("method", "fallback_cost_loss_ratio")),
                 "threshold": float(decision_threshold_used),
             },
+            "bayesian_profile_usage": bayesian_sampling_diagnostics.get("bayesian_profile_usage", bayesian_profile_usage),
+            "cv_subset_mode_active": bool(
+                bayesian_sampling_diagnostics.get("cv_subset_mode_active", cv_subset_mode_active)
+            ),
             "bayesian_subset": bayesian_sampling_diagnostics.get("bayesian_subset", {}),
         },
         bayesian_risk_metadata_path,

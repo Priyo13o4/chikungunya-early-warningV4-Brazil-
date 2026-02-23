@@ -53,6 +53,8 @@ class BayesianModelConfig:
     random_seed: int = 42
     strict_dependencies: bool = False
     force_full_bayesian: bool = False
+    convergence_failure_mode: str = "strict"
+    sampling_backend: str = "auto"
     outbreak_threshold_default_cases: float = 1.0
     posterior_sample_cap: int = 400
 
@@ -73,6 +75,11 @@ class HierarchicalBayesianModel:
     covariate_means_: dict[str, float] = field(default_factory=dict)
     covariate_scales_: dict[str, float] = field(default_factory=dict)
     diagnostics_summary_: dict[str, float] = field(default_factory=dict)
+    sampling_diagnostics_: dict[str, Any] = field(default_factory=dict)
+    sampling_backend_requested_: str = "auto"
+    sampling_backend_effective_: str = "pymc"
+    sampling_backend_fallback_reason_: str | None = None
+    sampling_runtime_backend_: str = "cpu"
     simplified_used_: bool = False
     alpha_nb_: float = 1.0
 
@@ -102,6 +109,11 @@ class HierarchicalBayesianModel:
 
     def _fit_fallback(self, frame: pd.DataFrame, reason: str) -> None:
         LOGGER.warning("Using Bayesian fallback mode: %s", reason)
+        requested_sampling_backend = self._normalize_sampling_backend(self.config.sampling_backend)
+        self.sampling_backend_requested_ = requested_sampling_backend
+        self.sampling_backend_effective_ = "pymc"
+        self.sampling_backend_fallback_reason_ = str(reason)
+        self.sampling_runtime_backend_ = "cpu"
         self.fallback_rate_ = float(frame["__target__"].mean()) if len(frame) else 0.0
         self.global_intercept_ = float(np.log1p(self.fallback_rate_))
         self.district_effects_ = (
@@ -414,6 +426,158 @@ class HierarchicalBayesianModel:
             or (np.isfinite(ess_min) and ess_min < float(self.config.ess_warn_threshold))
         )
 
+    @staticmethod
+    def _normalize_sampling_backend(raw_backend: Any) -> str:
+        normalized = str(raw_backend if raw_backend is not None else "auto").strip().lower()
+        if normalized not in {"auto", "pymc", "jax_numpyro"}:
+            LOGGER.warning("Invalid sampling_backend '%s'; defaulting to 'auto'", raw_backend)
+            return "auto"
+        return normalized
+
+    @staticmethod
+    def _resolve_sampling_backend(requested_backend: str, compute_backend_effective: str) -> str:
+        if requested_backend == "auto":
+            if str(compute_backend_effective or "cpu").strip().lower() == "nvidia_cuda":
+                return "jax_numpyro"
+            return "pymc"
+        return requested_backend
+
+    @staticmethod
+    def _expected_runtime_backend(compute_backend_effective: str) -> str:
+        normalized = str(compute_backend_effective or "cpu").strip().lower()
+        if normalized == "macos_metal":
+            return "metal"
+        if normalized == "nvidia_cuda":
+            return "cuda"
+        return "cpu"
+
+    def _infer_jax_runtime_backend(self, jax_module: Any) -> str:
+        try:
+            devices = jax_module.devices()
+        except Exception:
+            return "cpu"
+        if not devices:
+            return "cpu"
+        device_platform = str(getattr(devices[0], "platform", "cpu")).strip().lower()
+        if device_platform == "metal":
+            return "metal"
+        if device_platform in {"gpu", "cuda", "rocm"}:
+            return "cuda"
+        return "cpu"
+
+    def _choose_sampling_backend(self, compute_backend_effective: str) -> tuple[str, str]:
+        requested_sampling_backend = self._normalize_sampling_backend(self.config.sampling_backend)
+        effective_sampling_backend = self._resolve_sampling_backend(
+            requested_sampling_backend,
+            str(compute_backend_effective or "cpu"),
+        )
+        return requested_sampling_backend, effective_sampling_backend
+
+    def _fit_jax_numpyro_model(
+        self,
+        *,
+        pm: Any,
+        jax: Any,
+        districts: pd.Index,
+        times: pd.Index,
+        district_idx: np.ndarray,
+        time_idx: np.ndarray,
+        feature_matrix_scaled: np.ndarray,
+        observed: np.ndarray,
+        simplified_mode: bool,
+    ) -> tuple[Any, Any, np.ndarray, str]:
+        sampling_jax = getattr(pm, "sampling_jax", None)
+        sample_numpyro_nuts = getattr(sampling_jax, "sample_numpyro_nuts", None) if sampling_jax is not None else None
+        if sample_numpyro_nuts is None:
+            pymc_sampling_jax = _try_import("pymc.sampling.jax")
+            sample_numpyro_nuts = (
+                getattr(pymc_sampling_jax, "sample_numpyro_nuts", None) if pymc_sampling_jax is not None else None
+            )
+        if sample_numpyro_nuts is None:
+            LOGGER.warning("PyMC JAX sampler is unavailable. Falling back to CPU.")
+            raise ImportError("PyMC JAX sampler is unavailable (missing pymc.sampling.jax.sample_numpyro_nuts)")
+
+        coords: dict[str, Any] = {
+            "district": districts.astype(str).tolist(),
+            "covariate": list(self.config.climate_covariates),
+            "obs": np.arange(len(observed)),
+        }
+        if not simplified_mode:
+            coords["time"] = [str(timestamp) for timestamp in times.tolist()]
+
+        with pm.Model(coords=coords) as model:
+            mu_alpha = pm.Normal("mu_alpha", mu=0.0, sigma=1.0)
+            sigma_alpha = pm.HalfNormal("sigma_alpha", sigma=0.5)
+            alpha_raw = pm.Normal("alpha_raw", mu=0.0, sigma=1.0, dims="district")
+            alpha_district = pm.Deterministic(
+                "alpha_district",
+                mu_alpha + alpha_raw * sigma_alpha,
+                dims="district",
+            )
+
+            beta = pm.Normal("beta", mu=0.0, sigma=0.4, dims="covariate")
+
+            if simplified_mode:
+                z_t_values = np.zeros(len(times), dtype=float)
+                linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
+            else:
+                rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.8)
+                rho = pm.Deterministic("rho", 0.95 * pm.math.tanh(rho_raw))
+                sigma_z = pm.HalfNormal("sigma_z", sigma=0.35)
+                z_t = pm.AR(
+                    "z_t",
+                    rho=rho,
+                    sigma=sigma_z,
+                    init_dist=pm.Normal.dist(mu=0.0, sigma=0.35),
+                    dims="time",
+                )
+                linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta) + z_t[time_idx]
+                z_t_values = np.full(len(times), np.nan, dtype=float)
+
+            mu = pm.math.exp(pm.math.clip(linear, -10.0, 10.0))
+            alpha_nb = pm.Exponential("alpha_nb", lam=1.0)
+            pm.NegativeBinomial("cases_obs", mu=mu, alpha=alpha_nb, observed=observed, dims="obs")
+
+            LOGGER.info(
+                "Starting Bayesian JAX sampling: chains=%d, draws=%d, tune=%d, target_accept=%.3f, max_treedepth=%d, simplified_mode=%s, progressbar=%s",
+                int(self.config.chains),
+                int(self.config.draws),
+                int(self.config.tune),
+                float(self.config.target_accept),
+                int(self.config.max_treedepth),
+                bool(simplified_mode),
+                bool(self.config.bayesian_progress),
+            )
+
+            sampling_kwargs: dict[str, Any] = {
+                "draws": self.config.draws,
+                "tune": self.config.tune,
+                "chains": self.config.chains,
+                "target_accept": self.config.target_accept,
+                "random_seed": self.config.random_seed,
+                "progressbar": self.config.bayesian_progress,
+                "nuts_kwargs": {"max_tree_depth": self.config.max_treedepth},
+                "idata_kwargs": {"log_likelihood": False},
+            }
+            try:
+                idata = sample_numpyro_nuts(**sampling_kwargs)
+            except TypeError:
+                sampling_kwargs.pop("nuts_kwargs", None)
+                sampling_kwargs.pop("idata_kwargs", None)
+                idata = sample_numpyro_nuts(**sampling_kwargs)
+
+        if not hasattr(idata, "posterior"):
+            raise RuntimeError("JAX sampler did not return posterior inference data")
+        posterior = getattr(idata, "posterior", None)
+        if posterior is None or "alpha_district" not in posterior or "beta" not in posterior:
+            raise RuntimeError("JAX sampler posterior missing required variables for downstream diagnostics")
+
+        if not simplified_mode and "z_t" in idata.posterior:
+            z_t_values = np.asarray(idata.posterior["z_t"].mean(dim=("chain", "draw")).to_numpy(), dtype=float)
+
+        runtime_backend = self._infer_jax_runtime_backend(jax)
+        return model, idata, z_t_values, runtime_backend
+
     def _fit_pymc_model(
         self,
         *,
@@ -494,6 +658,88 @@ class HierarchicalBayesianModel:
 
         return model, idata, z_t_values
 
+    def _fit_with_selected_backend(
+        self,
+        *,
+        pm: Any,
+        districts: pd.Index,
+        times: pd.Index,
+        district_idx: np.ndarray,
+        time_idx: np.ndarray,
+        feature_matrix_scaled: np.ndarray,
+        observed: np.ndarray,
+        simplified_mode: bool,
+        requested_sampling_backend: str,
+        effective_sampling_backend: str,
+    ) -> tuple[Any, Any, np.ndarray, str, str, str | None, str]:
+        sampling_fallback_reason: str | None = None
+        actual_runtime_backend = "cpu"
+
+        if effective_sampling_backend == "jax_numpyro":
+            try:
+                jax_module = _try_import("jax")
+                numpyro_module = _try_import("numpyro")
+                if jax_module is None or numpyro_module is None:
+                    raise ImportError("missing optional JAX dependencies 'jax' and/or 'numpyro'")
+                model, idata, z_t_values, actual_runtime_backend = self._fit_jax_numpyro_model(
+                    pm=pm,
+                    jax=jax_module,
+                    districts=districts,
+                    times=times,
+                    district_idx=district_idx,
+                    time_idx=time_idx,
+                    feature_matrix_scaled=feature_matrix_scaled,
+                    observed=observed,
+                    simplified_mode=simplified_mode,
+                )
+                return (
+                    model,
+                    idata,
+                    z_t_values,
+                    requested_sampling_backend,
+                    effective_sampling_backend,
+                    sampling_fallback_reason,
+                    actual_runtime_backend,
+                )
+            except Exception as jax_error:
+                sampling_fallback_reason = f"JAX sampler unavailable; falling back to PyMC CPU sampler ({jax_error})"
+                LOGGER.warning("============================================================")
+                LOGGER.warning("WARNING: %s", sampling_fallback_reason)
+                error_text = str(jax_error)
+                if "default_memory_space" in error_text:
+                    LOGGER.warning(
+                        "Detected JAX-Metal runtime incompatibility (default_memory_space). "
+                        "On macOS, ensure a supported JAX/jaxlib/jax-metal version matrix and consider Python 3.12/3.13 for Metal runs."
+                    )
+                    LOGGER.warning(
+                        "Optional probe: set ENABLE_PJRT_COMPATIBILITY=1 for newer jaxlib compatibility on Metal."
+                    )
+                else:
+                    LOGGER.warning("Ensure jax, jaxlib, and numpyro are installed in your environment.")
+                LOGGER.warning("============================================================")
+                effective_sampling_backend = "pymc"
+                actual_runtime_backend = "cpu"
+
+        model, idata, z_t_values = self._fit_pymc_model(
+            pm=pm,
+            districts=districts,
+            times=times,
+            district_idx=district_idx,
+            time_idx=time_idx,
+            feature_matrix_scaled=feature_matrix_scaled,
+            observed=observed,
+            simplified_mode=simplified_mode,
+        )
+        return (
+            model,
+            idata,
+            z_t_values,
+            requested_sampling_backend,
+            effective_sampling_backend,
+            sampling_fallback_reason,
+            actual_runtime_backend,
+        )
+
     def _finalize_from_posterior(
         self,
         *,
@@ -535,7 +781,13 @@ class HierarchicalBayesianModel:
         self.diagnostics_summary_ = diagnostics_summary
         self.fitted_ = True
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "HierarchicalBayesianModel":
+    def fit(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        *,
+        compute_backend_effective: str = "cpu",
+    ) -> "HierarchicalBayesianModel":
         """Fit the hierarchical model using PyMC when available."""
         frame = self._prepare_design(X, y)
         self.fallback_rate_ = float(frame["__target__"].mean()) if len(frame) else 0.0
@@ -569,6 +821,11 @@ class HierarchicalBayesianModel:
         }
         observed = frame["__target__"].to_numpy(dtype=float)
 
+        requested_sampling_backend, effective_sampling_backend = self._choose_sampling_backend(
+            str(compute_backend_effective or "cpu")
+        )
+        expected_runtime_backend = self._expected_runtime_backend(str(compute_backend_effective or "cpu"))
+
         simplified_mode = bool(self.config.bayesian_simplified_mode)
         if self.config.force_full_bayesian:
             if simplified_mode:
@@ -576,7 +833,16 @@ class HierarchicalBayesianModel:
                     "force_full_bayesian=True overrides bayesian_simplified_mode=True; running full latent AR(1) model."
                 )
             simplified_mode = False
-        model, idata, z_t_values = self._fit_pymc_model(
+
+        (
+            model,
+            idata,
+            z_t_values,
+            requested_sampling_backend,
+            effective_sampling_backend,
+            sampling_fallback_reason,
+            actual_runtime_backend,
+        ) = self._fit_with_selected_backend(
             pm=pm,
             districts=districts,
             times=times,
@@ -585,7 +851,23 @@ class HierarchicalBayesianModel:
             feature_matrix_scaled=feature_matrix_scaled,
             observed=observed,
             simplified_mode=simplified_mode,
+            requested_sampling_backend=requested_sampling_backend,
+            effective_sampling_backend=effective_sampling_backend,
         )
+
+        self.sampling_backend_requested_ = requested_sampling_backend
+        self.sampling_backend_effective_ = effective_sampling_backend
+        self.sampling_backend_fallback_reason_ = sampling_fallback_reason
+        self.sampling_runtime_backend_ = actual_runtime_backend
+
+        self.sampling_diagnostics_ = {
+            "sampling_backend_requested": self.sampling_backend_requested_,
+            "sampling_backend_effective": self.sampling_backend_effective_,
+            "sampling_backend_fallback_reason": self.sampling_backend_fallback_reason_,
+            "actual_runtime_backend": self.sampling_runtime_backend_,
+            "backend_implemented": bool(actual_runtime_backend == expected_runtime_backend),
+            "compute_backend_effective": str(compute_backend_effective or "cpu"),
+        }
 
         diagnostics_summary = self._extract_sampler_diagnostics(idata)
         try:

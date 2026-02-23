@@ -1,6 +1,6 @@
 {
-  "run_id": "20260219T093417Z-b14844cc",
-  "started_at_utc": "2026-02-19T09:34:17.334623+00:00",
+  "run_id": "20260223T135230Z-fdaae705",
+  "started_at_utc": "2026-02-23T13:52:30.207318+00:00",
   "effective_seed": 42,
   "model_config_path": "config/model_config.yaml",
   "adapter_config_path": "projects/brazil_chik/config.yaml",
@@ -36,22 +36,91 @@
     "force_full_effective": true,
     "brazil_adapter_active": true,
     "bayesian_simplified_mode": false,
-    "max_convergence_retries": 0
+    "max_convergence_retries": 0,
+    "convergence_failure_mode": "warn"
+  },
+  "bayesian_backend": {
+    "requested_backend": "auto",
+    "resolved_backend": "macos_metal",
+    "actual_runtime_backend": "cpu",
+    "backend_implemented": false,
+    "fallback_reason": "Bayesian implementation does not currently support 'macos_metal' execution; using CPU runtime path",
+    "sampling_backend_requested": "auto",
+    "sampling_backend_effective": "pymc",
+    "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'macos_metal' execution; using CPU runtime path",
+    "sampling_backend_requested_source": "bayesian_model"
+  },
+  "sampling_backend_requested": "auto",
+  "sampling_backend_effective": "pymc",
+  "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'macos_metal' execution; using CPU runtime path",
+  "bayesian_profile_usage": {
+    "profile_mode_override": "dev",
+    "default_routing": "fullfit=final,oof=cv",
+    "fullfit_profile_name": "dev",
+    "oof_profile_name": "dev",
+    "declared_profiles": {
+      "cv": {
+        "chains": 2,
+        "tune": 600,
+        "draws": 400,
+        "target_accept": 0.95,
+        "max_treedepth": 12,
+        "bayesian_progress": false
+      },
+      "final": {
+        "chains": 2,
+        "tune": 1200,
+        "draws": 800,
+        "target_accept": 0.99,
+        "max_treedepth": 14,
+        "bayesian_progress": true
+      },
+      "dev": {
+        "chains": 1,
+        "tune": 100,
+        "draws": 80,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
+        "bayesian_progress": false
+      }
+    },
+    "effective_profile_values": {
+      "fullfit": {
+        "chains": 1,
+        "tune": 100,
+        "draws": 80,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
+        "bayesian_progress": false
+      },
+      "oof": {
+        "chains": 1,
+        "tune": 100,
+        "draws": 80,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
+        "bayesian_progress": false
+      }
+    },
+    "cv_profile_differs_from_final": false,
+    "cv_vs_final_diff_keys": [],
+    "warning_flags": [],
+    "cv_subset_mode_active": false
   },
   "compute_backend": {
     "configured": true,
     "requested": {
-      "mode": "cpu",
+      "mode": "auto",
       "prefer_gpu_for": "both",
       "fallback": "cpu",
       "configured": true
     },
     "effective": {
-      "baseline_backend": "cpu",
-      "bayesian_backend": "cpu"
+      "baseline_backend": "macos_metal",
+      "bayesian_backend": "macos_metal"
     },
-    "baseline_backend": "cpu",
-    "bayesian_backend": "cpu",
+    "baseline_backend": "macos_metal",
+    "bayesian_backend": "macos_metal",
     "fallback": "cpu",
     "fallback_used": false,
     "reason_logs": [],
@@ -78,18 +147,18 @@
     "tracks": {
       "baseline": {
         "track": "baseline",
-        "requested_mode": "cpu",
+        "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "cpu",
+        "effective_backend": "macos_metal",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
       },
       "bayesian": {
         "track": "bayesian",
-        "requested_mode": "cpu",
+        "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "cpu",
+        "effective_backend": "macos_metal",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
@@ -120,7 +189,7 @@
       "start_year": 2020,
       "end_year": 2020,
       "selected_percentile": 75,
-      "skip_baselines": true,
+      "skip_baselines": false,
       "skip_bayesian": false,
       "skip_visualizations": true,
       "decision_cost": 0.2,
@@ -128,24 +197,25 @@
       "lead_time_max_lookback_steps": 8,
       "strict_bayesian_deps": false,
       "strict_feature_gate": false,
-      "bayesian_draws": 10,
-      "bayesian_tune": 10,
-      "bayesian_chains": 1,
+      "bayesian_draws": null,
+      "bayesian_tune": null,
+      "bayesian_chains": null,
       "bayesian_target_accept": null,
       "bayesian_max_treedepth": null,
-      "bayesian_progress": true,
-      "bayesian_simplified_mode": true,
+      "bayesian_profile_mode": "dev",
+      "bayesian_progress": null,
+      "bayesian_simplified_mode": false,
       "force_full_bayesian": false,
       "export_detailed_csv": false,
       "model_names": null,
       "log_level": "INFO",
       "seed": null
     },
-    "git_commit_sha": null,
+    "git_commit_sha": "08752b411489e5762e15618c4931b62fc7015884",
     "python_version": "3.14.3 (main, Feb  3 2026, 15:32:20) [Clang 17.0.0 (clang-1700.6.3.2)]",
     "input_hashes_sha256": {
       "raw_data": "e9af9376881e47e0f479357b7757b6f286f729f8efe7d5b6e95b9fe5ebd0243f",
-      "model_config": "5acb58cd60bd542bf4dc6e074c0e72d0dd45bc6beecf5f60049923170ce3dee2",
+      "model_config": "255113a5b0869831f878ae7352bc977dac0934a778bcb098d4bc730357652ddc",
       "adapter_config": "531dd8a3a14ffa4d7f48e80a97ee985c8a10a420ee9f72f66cfaa9f580bc1ab8",
       "cv_config": "1ed94638da7008fbe8558497be172feb23e622cf138ab49c353a709f7c43422e"
     }

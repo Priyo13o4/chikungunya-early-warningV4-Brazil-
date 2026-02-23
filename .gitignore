@@ -12,6 +12,7 @@ dist/
 # Virtual environments
 .venv/
 venv/
+.venv310
 env/
 ENV/
 resources/.venv/

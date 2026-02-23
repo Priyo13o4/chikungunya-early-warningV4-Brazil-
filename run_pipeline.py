@@ -147,6 +147,20 @@ def _build_model_input_df(
 def _build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[str, Any]) -> Any:
     from src.models.bayesian.hierarchical_model import BayesianModelConfig
 
+    raw_convergence_failure_mode = bayesian_settings.get("convergence_failure_mode", BayesianModelConfig.convergence_failure_mode)
+    convergence_failure_mode = str(raw_convergence_failure_mode).strip().lower()
+    if convergence_failure_mode not in {"strict", "warn"}:
+        LOGGER.warning(
+            "Invalid bayesian_model.convergence_failure_mode '%s'; using '%s'",
+            raw_convergence_failure_mode,
+            BayesianModelConfig.convergence_failure_mode,
+        )
+        convergence_failure_mode = BayesianModelConfig.convergence_failure_mode
+
+    sampling_backend = runtime_config.normalize_sampling_backend(
+        bayesian_settings.get("sampling_backend", BayesianModelConfig.sampling_backend)
+    )
+
     return BayesianModelConfig(
         strict_dependencies=strict_dependencies,
         draws=int(bayesian_settings.get("draws", BayesianModelConfig.draws)),
@@ -174,6 +188,8 @@ def _build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[st
         force_full_bayesian=bool(
             bayesian_settings.get("force_full_bayesian", BayesianModelConfig.force_full_bayesian)
         ),
+        convergence_failure_mode=convergence_failure_mode,
+        sampling_backend=sampling_backend,
         outbreak_threshold_default_cases=float(
             bayesian_settings.get(
                 "outbreak_threshold_default_cases",
@@ -822,13 +838,17 @@ def _run_bayesian_track(
 ) -> tuple[pd.DataFrame | None, Any | None, dict[str, Any]]:
     backend_requested = str(compute_backend_requested or "cpu")
     backend_effective = str(compute_backend_effective or "cpu")
-    bayesian_runtime_backend = "cpu"
-    backend_fallback_reason: str | None = None
-    if backend_effective != "cpu":
-        backend_fallback_reason = (
-            f"Bayesian implementation does not currently support '{backend_effective}' execution; using CPU runtime path"
-        )
-        LOGGER.warning("%s", backend_fallback_reason)
+    sampling_backend_requested = runtime_config.normalize_sampling_backend(
+        bayesian_settings.get("sampling_backend", "auto")
+    )
+    convergence_failure_mode = str(bayesian_settings.get("convergence_failure_mode", "strict")).strip().lower()
+    LOGGER.info(
+        "Bayesian phase start: backend requested=%s, resolved=%s, sampling_backend=%s, convergence_failure_mode=%s",
+        backend_requested,
+        backend_effective,
+        sampling_backend_requested,
+        convergence_failure_mode,
+    )
 
     try:
         from src.models.bayesian.hierarchical_model import BayesianModelConfig, HierarchicalBayesianModel
@@ -845,10 +865,28 @@ def _run_bayesian_track(
             )
             LOGGER.info("Bayesian mode request: full latent AR only (simplified fallback disabled).")
 
-        bayesian_model = HierarchicalBayesianModel(config=config).fit(features_df, count_target)
+        bayesian_model = HierarchicalBayesianModel(config=config).fit(
+            features_df,
+            count_target,
+            compute_backend_effective=backend_effective,
+        )
         risk_frame, predictive_metadata = bayesian_model.predict_with_uncertainty(
             features_df,
             outbreak_threshold=outbreak_threshold,
+        )
+        sampling_diag = dict(getattr(bayesian_model, "sampling_diagnostics_", {}) or {})
+        bayesian_runtime_backend = str(sampling_diag.get("actual_runtime_backend", "cpu"))
+        sampling_backend_effective = str(sampling_diag.get("sampling_backend_effective", "pymc"))
+        sampling_backend_fallback_reason = sampling_diag.get("sampling_backend_fallback_reason")
+        backend_implemented = bool(sampling_diag.get("backend_implemented", True))
+        backend_fallback_reason = (
+            sampling_backend_fallback_reason
+            if sampling_backend_fallback_reason is not None
+            else (
+                f"Bayesian implementation does not currently support '{backend_effective}' execution; using CPU runtime path"
+                if not backend_implemented
+                else None
+            )
         )
         fallback_used = bool(float(bayesian_model.diagnostics_summary_.get("fallback", 0.0)) > 0.0)
         mode_used = "fallback" if fallback_used else ("simplified" if bayesian_model.simplified_used_ else "full_latent_ar")
@@ -858,6 +896,14 @@ def _run_bayesian_track(
             "mode_used": mode_used,
             "fallback_used": fallback_used,
             "degraded_mode": bool(predictive_metadata.get("degraded_mode", False) or fallback_used),
+            "requested_backend": backend_requested,
+            "resolved_backend": backend_effective,
+            "actual_runtime_backend": bayesian_runtime_backend,
+            "backend_implemented": backend_implemented,
+            "fallback_reason": backend_fallback_reason,
+            "sampling_backend_requested": sampling_backend_requested,
+            "sampling_backend_effective": sampling_backend_effective,
+            "sampling_backend_fallback_reason": sampling_backend_fallback_reason,
             "compute_backend_requested": backend_requested,
             "compute_backend_effective": backend_effective,
             "compute_backend_runtime": bayesian_runtime_backend,
@@ -874,12 +920,29 @@ def _run_bayesian_track(
         LOGGER.warning("Skipping Bayesian phase due to missing optional dependencies: %s", import_error)
         if strict_dependencies:
             raise
+        bayesian_runtime_backend = "cpu"
+        sampling_backend_effective = "pymc"
+        sampling_backend_fallback_reason = f"missing optional dependencies ({import_error})"
+        backend_implemented = bool(backend_effective == "cpu")
+        backend_fallback_reason = (
+            sampling_backend_fallback_reason
+            if backend_effective != "cpu"
+            else sampling_backend_fallback_reason
+        )
         return None, None, {
             "degraded_mode": True,
             "fallback_used": True,
             "mode_used": "missing_dependencies",
             "degraded_reason": "missing_optional_dependencies",
             "error": str(import_error),
+            "requested_backend": backend_requested,
+            "resolved_backend": backend_effective,
+            "actual_runtime_backend": bayesian_runtime_backend,
+            "backend_implemented": backend_implemented,
+            "fallback_reason": backend_fallback_reason,
+            "sampling_backend_requested": sampling_backend_requested,
+            "sampling_backend_effective": sampling_backend_effective,
+            "sampling_backend_fallback_reason": sampling_backend_fallback_reason,
             "compute_backend_requested": backend_requested,
             "compute_backend_effective": backend_effective,
             "compute_backend_runtime": bayesian_runtime_backend,
@@ -1081,6 +1144,7 @@ def run(
     strict_feature_gate: bool = False,
     force_full_bayesian: bool = False,
     bayesian_overrides: dict[str, Any] | None = None,
+    bayesian_profile_mode: str | None = None,
     export_detailed_csv: bool = False,
     model_names: list[str] | None = None,
     seed: int | None = None,
@@ -1128,11 +1192,60 @@ def run(
     bayesian_settings = raw_model_config.get("bayesian_model", {}).copy()
     if not isinstance(bayesian_settings, dict):
         bayesian_settings = {}
+    bayesian_profiles = raw_model_config.get("bayesian_model_profiles", {})
+    if not isinstance(bayesian_profiles, dict):
+        bayesian_profiles = {}
+    runtime_settings = raw_model_config.get("runtime", {})
+    if not isinstance(runtime_settings, dict):
+        runtime_settings = {}
+    sampling_backend_runtime_value = runtime_settings.get("sampling_backend")
+    sampling_backend_model_value = bayesian_settings.get("sampling_backend")
+    sampling_backend_requested_source = "bayesian_model"
+    sampling_backend_requested_raw = sampling_backend_model_value
+    if sampling_backend_requested_raw is None and sampling_backend_runtime_value is not None:
+        sampling_backend_requested_source = "runtime"
+        sampling_backend_requested_raw = sampling_backend_runtime_value
+    if sampling_backend_requested_raw is None:
+        sampling_backend_requested_source = "default"
+        sampling_backend_requested_raw = "auto"
+    bayesian_settings["sampling_backend"] = runtime_config.normalize_sampling_backend(sampling_backend_requested_raw)
+
+    bayesian_settings_fullfit, bayesian_settings_cv, bayesian_profile_usage = runtime_config.resolve_bayesian_profile_settings(
+        bayesian_settings=bayesian_settings,
+        bayesian_profiles=bayesian_profiles,
+        profile_mode=bayesian_profile_mode,
+    )
+
+    if bayesian_overrides:
+        non_null_overrides = {key: value for key, value in bayesian_overrides.items() if value is not None}
+        if non_null_overrides:
+            bayesian_settings_fullfit.update(non_null_overrides)
+            bayesian_settings_cv.update(non_null_overrides)
+
+    bayesian_settings_fullfit["random_seed"] = effective_seed
+    bayesian_settings_cv["random_seed"] = effective_seed
+    bayesian_settings_fullfit["sampling_backend"] = runtime_config.normalize_sampling_backend(
+        bayesian_settings_fullfit.get("sampling_backend", "auto")
+    )
+    bayesian_settings_cv["sampling_backend"] = runtime_config.normalize_sampling_backend(
+        bayesian_settings_cv.get("sampling_backend", "auto")
+    )
+
+    cv_subset_mode_active = False
     memory_optimization_config = runtime_config.parse_memory_optimization_config(raw_model_config)
     compute_backend_config = runtime_config.parse_compute_backend_config(raw_model_config)
     backend_resolution = runtime_backend.resolve_backends(compute_backend_config)
     baseline_backend_effective = str(backend_resolution.get("baseline_backend", "cpu"))
     bayesian_backend_effective = str(backend_resolution.get("bayesian_backend", "cpu"))
+    bayesian_requested_backend = str(compute_backend_config.mode)
+    bayesian_resolved_backend = str(bayesian_backend_effective)
+    bayesian_actual_runtime_backend = "cpu"
+    bayesian_backend_implemented = bool(bayesian_actual_runtime_backend == bayesian_resolved_backend)
+    bayesian_backend_fallback_reason: str | None = None
+    if not bayesian_backend_implemented:
+        bayesian_backend_fallback_reason = (
+            f"Bayesian implementation does not currently support '{bayesian_resolved_backend}' execution; using CPU runtime path"
+        )
     decision_settings = raw_model_config.get("decision", {})
     if not isinstance(decision_settings, dict):
         decision_settings = {}
@@ -1155,14 +1268,10 @@ def run(
     )
     alert_thresholds.validate()
 
-    bayesian_settings["random_seed"] = effective_seed
-    if bayesian_overrides:
-        bayesian_settings.update({key: value for key, value in bayesian_overrides.items() if value is not None})
-
     brazil_adapter_active = runtime_config.is_brazil_adapter_config_active(adapter_config)
     requested_force_full = bool(
         force_full_bayesian
-        or bayesian_settings.get("force_full_bayesian", False)
+        or bayesian_settings_fullfit.get("force_full_bayesian", False)
         or adapter_config.get("force_full_bayesian_project_only", False)
     )
     force_full_effective = bool(requested_force_full and brazil_adapter_active)
@@ -1171,10 +1280,13 @@ def run(
             "Ignoring force_full_bayesian request because Brazil adapter config is not active; "
             "falling back to configured non-forced Bayesian mode."
         )
-    bayesian_settings["force_full_bayesian"] = bool(force_full_effective)
+    bayesian_settings_fullfit["force_full_bayesian"] = bool(force_full_effective)
+    bayesian_settings_cv["force_full_bayesian"] = bool(force_full_effective)
     if force_full_effective:
-        bayesian_settings["bayesian_simplified_mode"] = False
-        bayesian_settings["max_convergence_retries"] = 0
+        bayesian_settings_fullfit["bayesian_simplified_mode"] = False
+        bayesian_settings_fullfit["max_convergence_retries"] = 0
+        bayesian_settings_cv["bayesian_simplified_mode"] = False
+        bayesian_settings_cv["max_convergence_retries"] = 0
         if not skip_baselines:
             LOGGER.info("Force-full Bayesian mode active; skipping baseline track by design")
         skip_baselines = True
@@ -1316,6 +1428,7 @@ def run(
                 "strict_feature_gate": strict_feature_gate,
                 "force_full_bayesian": force_full_bayesian,
                 "bayesian_overrides": bayesian_overrides,
+                "bayesian_profile_mode": bayesian_profile_mode,
                 "export_detailed_csv": export_detailed_csv,
                 "model_names": model_names,
                 "seed": seed,
@@ -1332,8 +1445,7 @@ def run(
     }
 
     run_metadata_path = paths.outputs_reports / "run_metadata.json"
-    runtime_artifacts.safe_write_json(
-        {
+    run_metadata_payload: dict[str, Any] = {
             "run_id": run_id,
             "started_at_utc": run_started_at,
             "effective_seed": int(effective_seed),
@@ -1356,8 +1468,27 @@ def run(
                 "force_full_requested": bool(requested_force_full),
                 "force_full_effective": bool(force_full_effective),
                 "brazil_adapter_active": bool(brazil_adapter_active),
-                "bayesian_simplified_mode": bool(bayesian_settings.get("bayesian_simplified_mode", False)),
-                "max_convergence_retries": int(bayesian_settings.get("max_convergence_retries", 0)),
+                "bayesian_simplified_mode": bool(bayesian_settings_fullfit.get("bayesian_simplified_mode", False)),
+                "max_convergence_retries": int(bayesian_settings_fullfit.get("max_convergence_retries", 0)),
+                "convergence_failure_mode": str(bayesian_settings_fullfit.get("convergence_failure_mode", "warn")),
+            },
+            "bayesian_backend": {
+                "requested_backend": bayesian_requested_backend,
+                "resolved_backend": bayesian_resolved_backend,
+                "actual_runtime_backend": bayesian_actual_runtime_backend,
+                "backend_implemented": bool(bayesian_backend_implemented),
+                "fallback_reason": bayesian_backend_fallback_reason,
+                "sampling_backend_requested": str(bayesian_settings_fullfit.get("sampling_backend", "auto")),
+                "sampling_backend_effective": "pymc",
+                "sampling_backend_fallback_reason": bayesian_backend_fallback_reason,
+                "sampling_backend_requested_source": sampling_backend_requested_source,
+            },
+            "sampling_backend_requested": str(bayesian_settings_fullfit.get("sampling_backend", "auto")),
+            "sampling_backend_effective": "pymc",
+            "sampling_backend_fallback_reason": bayesian_backend_fallback_reason,
+            "bayesian_profile_usage": {
+                **bayesian_profile_usage,
+                "cv_subset_mode_active": bool(cv_subset_mode_active),
             },
             "compute_backend": backend_resolution,
             "memory_optimization": {
@@ -1367,7 +1498,9 @@ def run(
                 "rows_after": int(memory_optimization_report.get("outputs", {}).get("labeled_rows", len(labeled_df))),
             },
             "reproducibility": reproducibility_pack,
-        },
+    }
+    runtime_artifacts.safe_write_json(
+        run_metadata_payload,
         run_metadata_path,
     )
     state.artifacts["run_metadata"] = run_metadata_path
@@ -1413,7 +1546,7 @@ def run(
         safe_write_json_fn=_safe_write_json,
     )
 
-    strict_or_full_bayesian_mode = bool(strict_bayesian_deps or bayesian_settings.get("force_full_bayesian", False))
+    strict_or_full_bayesian_mode = bool(strict_bayesian_deps or bayesian_settings_fullfit.get("force_full_bayesian", False))
     bayesian_result = runtime_bayesian.run_bayesian_phase(
         state=state,
         paths=paths,
@@ -1425,7 +1558,9 @@ def run(
         district_index=baseline_result.district_index,
         skip_bayesian=skip_bayesian,
         strict_bayesian_deps=strict_bayesian_deps,
-        bayesian_settings=bayesian_settings,
+        bayesian_settings_fullfit=bayesian_settings_fullfit,
+        bayesian_settings_cv=bayesian_settings_cv,
+        bayesian_profile_usage=bayesian_profile_usage,
         bayesian_compute_backend_requested=str(compute_backend_config.mode),
         bayesian_compute_backend_effective=bayesian_backend_effective,
         effective_cv_config=effective_cv_config,
@@ -1433,6 +1568,7 @@ def run(
         export_detailed_csv=export_detailed_csv,
         strict_or_full_bayesian_mode=strict_or_full_bayesian_mode,
         bayesian_subset_config=asdict(memory_optimization_config.bayesian_subset),
+        cv_subset_mode_active=bool(cv_subset_mode_active),
         bayesian_subset_seed=int(effective_seed),
         cv_split_callable=cv_split_callable,
         run_bayesian_track_fn=_run_bayesian_track,
@@ -1442,6 +1578,34 @@ def run(
         extract_rhat_ess_fn=extract_rhat_ess,
         safe_write_json_fn=_safe_write_json,
     )
+
+    bayesian_sampling_diagnostics = bayesian_result.bayesian_sampling_diagnostics or {}
+    run_metadata_payload["sampling_backend_requested"] = str(
+        bayesian_sampling_diagnostics.get("sampling_backend_requested", bayesian_settings.get("sampling_backend", "auto"))
+    )
+    run_metadata_payload["sampling_backend_effective"] = str(
+        bayesian_sampling_diagnostics.get("sampling_backend_effective", "pymc")
+    )
+    run_metadata_payload["sampling_backend_fallback_reason"] = bayesian_sampling_diagnostics.get(
+        "sampling_backend_fallback_reason"
+    )
+    run_metadata_payload["bayesian_backend"] = {
+        **run_metadata_payload.get("bayesian_backend", {}),
+        "actual_runtime_backend": str(bayesian_sampling_diagnostics.get("actual_runtime_backend", "cpu")),
+        "backend_implemented": bool(bayesian_sampling_diagnostics.get("backend_implemented", True)),
+        "fallback_reason": bayesian_sampling_diagnostics.get("fallback_reason"),
+        "sampling_backend_requested": run_metadata_payload["sampling_backend_requested"],
+        "sampling_backend_effective": run_metadata_payload["sampling_backend_effective"],
+        "sampling_backend_fallback_reason": run_metadata_payload["sampling_backend_fallback_reason"],
+    }
+    run_metadata_payload["bayesian_profile_usage"] = {
+        **run_metadata_payload.get("bayesian_profile_usage", {}),
+        **(bayesian_sampling_diagnostics.get("bayesian_profile_usage") or {}),
+        "cv_subset_mode_active": bool(
+            bayesian_sampling_diagnostics.get("cv_subset_mode_active", cv_subset_mode_active)
+        ),
+    }
+    runtime_artifacts.safe_write_json(run_metadata_payload, run_metadata_path)
 
     eval_decision_result = runtime_eval_decision.run_evaluation_and_decision_phase(
         state=state,
@@ -1456,6 +1620,10 @@ def run(
         bayesian_oof_score=bayesian_result.bayesian_oof_score,
         baseline_oof_score=baseline_result.baseline_oof_score,
         bayesian_sampling_diagnostics=bayesian_result.bayesian_sampling_diagnostics,
+        bayesian_profile_usage=run_metadata_payload.get("bayesian_profile_usage", {}),
+        cv_subset_mode_active=bool(
+            run_metadata_payload.get("bayesian_profile_usage", {}).get("cv_subset_mode_active", cv_subset_mode_active)
+        ),
         bayesian_convergence_payload=bayesian_result.bayesian_convergence_payload,
         bayesian_converged=bayesian_result.bayesian_converged,
         temporal_index=baseline_result.temporal_index,
@@ -1780,6 +1948,7 @@ def main() -> None:
             "bayesian_simplified_mode": args.bayesian_simplified_mode,
             "force_full_bayesian": args.force_full_bayesian,
         },
+        bayesian_profile_mode=args.bayesian_profile_mode,
         export_detailed_csv=args.export_detailed_csv,
         model_names=args.model_names,
         seed=args.seed,

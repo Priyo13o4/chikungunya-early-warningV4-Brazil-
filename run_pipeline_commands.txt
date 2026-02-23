@@ -1,0 +1,51 @@
+# Chikungunya EWS - Run Commands (copy/paste-safe)
+# Run from project root:
+# /Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4
+
+# 0) Activate env + load .env
+source .venv/bin/activate
+set -a && source .env && set +a
+
+# 1) Full thesis run (visible output, 2 chains, progress bar)
+python -u run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
+  --model-config config/model_config.yaml \
+  --cv-config config/cv_config.yaml \
+  --raw-data data/raw/Epiclim_Final_data.csv \
+  --start-year 2015 \
+  --end-year 2025 \
+  --selected-percentile 75 \
+  --bayesian-chains 2 \
+  --bayesian-progress
+
+# 2) Full run but faster (skip visualizations)
+python -u run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
+  --model-config config/model_config.yaml \
+  --cv-config config/cv_config.yaml \
+  --raw-data data/raw/Epiclim_Final_data.csv \
+  --start-year 2015 \
+  --end-year 2025 \
+  --selected-percentile 75 \
+  --skip-visualizations \
+  --bayesian-chains 2 \
+  --bayesian-progress
+
+# 3) Quick dev smoke run (2020 only, dev profile)
+python -u run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
+  --model-config config/model_config.yaml \
+  --cv-config config/cv_config.yaml \
+  --raw-data data/raw/Epiclim_Final_data.csv \
+  --start-year 2020 \
+  --end-year 2020 \
+  --selected-percentile 75 \
+  --skip-visualizations \
+  --bayesian-profile-mode dev \
+  --bayesian-progress
+
+# 4) If you still get a path error, verify these files exist:
+# - projects/brazil_chik/config.yaml
+# - config/model_config.yaml
+# - config/cv_config.yaml
+# - data/raw/Epiclim_Final_data.csv

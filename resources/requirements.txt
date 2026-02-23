@@ -20,6 +20,14 @@ pymc>=5.10.0
 arviz>=0.17.0
 pytensor>=2.18.0
 
+# Optional Bayesian JAX acceleration (install manually when enabling bayesian_model.sampling_backend=jax_numpyro)
+# macOS Metal example (Apple Silicon):
+#   pip install "jax-metal" "jax[cpu]" numpyro
+# NVIDIA CUDA example:
+#   pip install "jax[cuda12]" numpyro
+# numpyro>=0.15.0
+# jax>=0.4.30
+
 # Visualization
 matplotlib>=3.7.0
 seaborn>=0.13.0

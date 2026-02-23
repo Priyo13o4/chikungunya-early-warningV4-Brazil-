@@ -1,0 +1,32 @@
+# Windows CUDA environment for chikungunya-early-warningV4
+#
+# IMPORTANT
+# 1) This file targets Windows + NVIDIA CUDA for the current project.
+# 2) Baseline GPU acceleration can be achieved for XGBoost (and LightGBM only if GPU build is available).
+# 3) Bayesian JAX GPU is NOT reliably available on native Windows via pip wheels.
+#    Use WSL2/Linux for Bayesian GPU acceleration (JAX CUDA wheels are Linux-focused).
+#
+# Install with:
+#   python -m pip install --upgrade pip
+#   python -m pip install -r requirements-cuda-windows.txt
+
+# Reuse project base dependencies
+-r requirements.txt
+
+# Keep explicit to avoid accidental CPU-only minimal variants
+xgboost>=2.0.0
+lightgbm>=4.0.0
+
+# Optional quality-of-life (diagnostics)
+psutil>=5.9.0
+
+# NOTE ABOUT BAYESIAN GPU ON WINDOWS NATIVE
+# Do NOT add jax[cuda12]/jax[cuda13] here for native Windows expecting plug-and-play CUDA.
+# For Bayesian GPU path, run under WSL2 Ubuntu and install there instead, e.g.:
+#   pip install -U "jax[cuda13]" numpyro
+# or
+#   pip install -U "jax[cuda12]" numpyro
+
+# Hardware Accelerated Sampling
+jax[cuda12]
+numpyro>=0.13.0

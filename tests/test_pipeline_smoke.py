@@ -339,6 +339,205 @@ def test_bayesian_subset_metadata_emitted(tmp_path, monkeypatch) -> None:
     assert memory_report.get("mode") == "off"
 
 
+def test_bayesian_profiles_route_fullfit_and_oof_settings(tmp_path, monkeypatch) -> None:
+    synthetic = pd.DataFrame(
+        {
+            "date": pd.date_range("2014-01-01", periods=24, freq="MS").astype(str),
+            "district": (["A", "B", "C", "D"] * 6),
+            "state": ["S"] * 24,
+            "cases": list(range(1, 25)),
+            "rainfall": [float(i % 7) for i in range(24)],
+            "temperature": [28.0 + float(i % 3) for i in range(24)],
+            "humidity": [60.0 + float(i % 5) for i in range(24)],
+        }
+    )
+    raw_path = tmp_path / "synthetic_profile_routing_raw.csv"
+    synthetic.to_csv(raw_path, index=False)
+
+    model_config_path = tmp_path / "model_config_profiles.yaml"
+    model_config_path.write_text(
+        "\n".join(
+            [
+                "bayesian_model:",
+                "  sampling_backend: auto",
+                "  draws: 800",
+                "  tune: 1200",
+                "  chains: 2",
+                "  target_accept: 0.99",
+                "bayesian_model_profiles:",
+                "  cv:",
+                "    draws: 120",
+                "    tune: 200",
+                "    chains: 1",
+                "    bayesian_progress: false",
+                "  final:",
+                "    draws: 900",
+                "    tune: 1300",
+                "    chains: 2",
+                "    bayesian_progress: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    observed_fullfit: dict[str, object] = {}
+    observed_oof: dict[str, object] = {}
+
+    def fake_run_bayesian_track(features_df, count_target, *, outbreak_threshold, strict_dependencies, bayesian_settings, **kwargs):
+        features_df
+        count_target
+        outbreak_threshold
+        strict_dependencies
+        kwargs
+        observed_fullfit.update(
+            {
+                "draws": bayesian_settings.get("draws"),
+                "tune": bayesian_settings.get("tune"),
+                "chains": bayesian_settings.get("chains"),
+            }
+        )
+        n = len(features_df)
+        risk_frame = pd.DataFrame(
+            {
+                "risk_mean": [0.4] * n,
+                "risk_q05": [0.2] * n,
+                "risk_q95": [0.8] * n,
+                "threshold_cases": [1.0] * n,
+                "bayesian_risk": [0.4] * n,
+            }
+        )
+        return risk_frame, None, {
+            "fallback_used": False,
+            "degraded_mode": False,
+            "mode_used": "full_latent_ar",
+            "threshold_basis": "provided_series",
+            "threshold_default": 1.0,
+            "interval_source": "posterior",
+            "posterior_samples_used": 10,
+        }
+
+    def fake_collect_bayesian_oof_scores(**kwargs):
+        settings = kwargs.get("bayesian_settings", {})
+        observed_oof.update(
+            {
+                "draws": settings.get("draws"),
+                "tune": settings.get("tune"),
+                "chains": settings.get("chains"),
+            }
+        )
+        features = kwargs["features_df"]
+        return pd.Series([0.5] * len(features), index=features.index, dtype="float64")
+
+    monkeypatch.setattr("run_pipeline._run_bayesian_track", fake_run_bayesian_track)
+    monkeypatch.setattr("run_pipeline._collect_bayesian_oof_scores", fake_collect_bayesian_oof_scores)
+
+    run(
+        model_config_path=model_config_path,
+        raw_data_path=raw_path,
+        start_year=2014,
+        end_year=2015,
+        skip_baselines=True,
+        skip_visualizations=True,
+    )
+
+    assert int(observed_fullfit.get("draws", 0)) == 900
+    assert int(observed_oof.get("draws", 0)) == 120
+    assert int(observed_fullfit.get("tune", 0)) == 1300
+    assert int(observed_oof.get("tune", 0)) == 200
+
+
+def test_bayesian_profile_metadata_fields_present_and_consistent(tmp_path, monkeypatch) -> None:
+    synthetic = pd.DataFrame(
+        {
+            "date": pd.date_range("2016-01-01", periods=16, freq="W").astype(str),
+            "district": ["A", "A", "B", "B"] * 4,
+            "state": ["S"] * 16,
+            "cases": [1, 3, 2, 4, 5, 2, 1, 6, 3, 2, 4, 5, 2, 1, 3, 4],
+            "rainfall": [float(i % 5) for i in range(16)],
+            "temperature": [27.0 + float(i % 3) for i in range(16)],
+            "humidity": [60.0 + float(i % 4) for i in range(16)],
+        }
+    )
+    raw_path = tmp_path / "synthetic_profile_metadata_raw.csv"
+    synthetic.to_csv(raw_path, index=False)
+
+    model_config_path = tmp_path / "model_config_profiles_meta.yaml"
+    model_config_path.write_text(
+        "\n".join(
+            [
+                "bayesian_model_profiles:",
+                "  cv:",
+                "    draws: 120",
+                "    tune: 200",
+                "  final:",
+                "    draws: 900",
+                "    tune: 1300",
+                "  dev:",
+                "    draws: 60",
+                "    tune: 80",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run_bayesian_track(features_df, count_target, *, outbreak_threshold, strict_dependencies, bayesian_settings, **kwargs):
+        features_df
+        count_target
+        outbreak_threshold
+        strict_dependencies
+        bayesian_settings
+        kwargs
+        n = len(features_df)
+        risk_frame = pd.DataFrame(
+            {
+                "risk_mean": [0.4] * n,
+                "risk_q05": [0.2] * n,
+                "risk_q95": [0.8] * n,
+                "threshold_cases": [1.0] * n,
+                "bayesian_risk": [0.4] * n,
+            }
+        )
+        return risk_frame, None, {
+            "fallback_used": False,
+            "degraded_mode": False,
+            "mode_used": "full_latent_ar",
+            "threshold_basis": "provided_series",
+            "threshold_default": 1.0,
+            "interval_source": "posterior",
+            "posterior_samples_used": 10,
+        }
+
+    monkeypatch.setattr("run_pipeline._run_bayesian_track", fake_run_bayesian_track)
+    monkeypatch.setattr(
+        "run_pipeline._collect_bayesian_oof_scores",
+        lambda **kwargs: pd.Series([0.5] * len(kwargs["features_df"]), index=kwargs["features_df"].index, dtype="float64"),
+    )
+
+    artifacts = run(
+        model_config_path=model_config_path,
+        raw_data_path=raw_path,
+        start_year=2016,
+        end_year=2016,
+        skip_baselines=True,
+        skip_visualizations=True,
+    )
+
+    run_meta = json.loads(artifacts["run_metadata"].read_text(encoding="utf-8"))
+    risk_meta = json.loads(artifacts["bayesian_risk_metadata"].read_text(encoding="utf-8"))
+
+    profile_usage_run = run_meta.get("bayesian_profile_usage", {})
+    profile_usage_risk = risk_meta.get("bayesian_profile_usage", {})
+    assert profile_usage_run.get("fullfit_profile_name") == "final"
+    assert profile_usage_run.get("oof_profile_name") == "cv"
+    assert profile_usage_run.get("cv_profile_differs_from_final") is True
+    assert "draws" in profile_usage_run.get("cv_vs_final_diff_keys", [])
+    assert profile_usage_risk.get("fullfit_profile_name") == "final"
+    assert profile_usage_risk.get("oof_profile_name") == "cv"
+    assert "warning_flags" in profile_usage_run
+    assert "cv_subset_mode_active" in run_meta.get("bayesian_profile_usage", {})
+    assert "cv_subset_mode_active" in risk_meta
+
+
 def test_degraded_run_suppresses_headline_comparison_on_insufficient_folds(tmp_path, monkeypatch) -> None:
     rows: list[dict[str, object]] = []
     for year in range(2009, 2020):
@@ -578,6 +777,367 @@ def test_bayesian_headline_suppressed_when_convergence_false(tmp_path, monkeypat
     assert any(reason.get("code") == "bayesian_convergence_failed" for reason in degraded.get("reasons", []))
     assert risk_meta["headline_eligible"] is False
     assert risk_meta["converged"] is False
+
+
+def test_bayesian_convergence_warn_mode_prevents_strict_crash(tmp_path, monkeypatch) -> None:
+    synthetic = pd.DataFrame(
+        {
+            "date": pd.date_range("2016-01-01", periods=12, freq="W").astype(str),
+            "district": ["A"] * 6 + ["B"] * 6,
+            "state": ["S"] * 12,
+            "cases": [1, 3, 7, 2, 4, 6, 8, 1, 2, 3, 5, 7],
+            "rainfall": [5.0, 2.0, 7.0, 9.0, 1.0, 0.0, 3.0, 2.0, 4.0, 5.0, 1.0, 3.0],
+            "temperature": [28.0, 29.0, 30.0, 31.0, 27.0, 26.0, 25.0, 24.0, 28.0, 27.0, 26.0, 25.0],
+            "humidity": [60.0, 62.0, 58.0, 57.0, 64.0, 66.0, 68.0, 65.0, 63.0, 61.0, 60.0, 62.0],
+        }
+    )
+    raw_path = tmp_path / "synthetic_warn_mode_raw.csv"
+    synthetic.to_csv(raw_path, index=False)
+
+    def fake_run_bayesian_track(features_df, count_target, *, outbreak_threshold, strict_dependencies, bayesian_settings):
+        features_df
+        outbreak_threshold
+        strict_dependencies
+        bayesian_settings
+        n = len(count_target)
+        risk_frame = pd.DataFrame(
+            {
+                "risk_mean": [0.6] * n,
+                "risk_q05": [0.4] * n,
+                "risk_q95": [0.8] * n,
+                "threshold_cases": [1.0] * n,
+                "bayesian_risk": [0.6] * n,
+            }
+        )
+        return risk_frame, object(), {"degraded_mode": False, "fallback_used": False, "mode_used": "full_latent_ar"}
+
+    monkeypatch.setattr("run_pipeline._run_bayesian_track", fake_run_bayesian_track)
+    monkeypatch.setattr(
+        "run_pipeline._collect_bayesian_oof_scores",
+        lambda **kwargs: pd.Series([0.2, 0.8] * 6, index=kwargs["features_df"].index, dtype="float64"),
+    )
+    monkeypatch.setattr(
+        "run_pipeline.evaluate_bayesian_predictions",
+        lambda *args, **kwargs: {"brier_score": 0.2, "pr_auc": 0.6, "roc_auc": 0.7, "lead_time_mean": 1.0},
+    )
+    monkeypatch.setattr(
+        "run_pipeline.check_convergence",
+        lambda *args, **kwargs: {
+            "converged": False,
+            "divergences": 2.0,
+            "max_tree_depth": 14.0,
+            "r_hat_max": 1.2,
+            "ess_min": 20.0,
+            "divergence_threshold": 0.0,
+            "max_tree_depth_threshold": 12.0,
+            "rhat_threshold": 1.05,
+            "ess_threshold": 200.0,
+        },
+    )
+    monkeypatch.setattr(
+        "run_pipeline.extract_rhat_ess",
+        lambda _idata: pd.DataFrame({"parameter": ["x"], "r_hat": [1.2], "ess_bulk": [20.0]}),
+    )
+
+    artifacts = run(
+        raw_data_path=raw_path,
+        start_year=2016,
+        end_year=2016,
+        skip_baselines=True,
+        skip_visualizations=True,
+        strict_bayesian_deps=True,
+        bayesian_overrides={"convergence_failure_mode": "warn"},
+    )
+
+    bayes_metrics = json.loads(artifacts["bayesian_metrics"].read_text(encoding="utf-8"))
+    risk_meta = json.loads(artifacts["bayesian_risk_metadata"].read_text(encoding="utf-8"))
+    assert bayes_metrics.get("suppressed") is True
+    assert bayes_metrics.get("reason") == "bayesian_convergence_not_met"
+    assert risk_meta.get("convergence_failure_mode") == "warn"
+
+
+def test_bayesian_low_sample_auto_downgrade_to_warn(tmp_path, monkeypatch) -> None:
+    synthetic = pd.DataFrame(
+        {
+            "date": pd.date_range("2016-01-01", periods=12, freq="W").astype(str),
+            "district": ["A"] * 6 + ["B"] * 6,
+            "state": ["S"] * 12,
+            "cases": [1, 3, 7, 2, 4, 6, 8, 1, 2, 3, 5, 7],
+            "rainfall": [5.0, 2.0, 7.0, 9.0, 1.0, 0.0, 3.0, 2.0, 4.0, 5.0, 1.0, 3.0],
+            "temperature": [28.0, 29.0, 30.0, 31.0, 27.0, 26.0, 25.0, 24.0, 28.0, 27.0, 26.0, 25.0],
+            "humidity": [60.0, 62.0, 58.0, 57.0, 64.0, 66.0, 68.0, 65.0, 63.0, 61.0, 60.0, 62.0],
+        }
+    )
+    raw_path = tmp_path / "synthetic_low_sample_warn_raw.csv"
+    synthetic.to_csv(raw_path, index=False)
+
+    def fake_run_bayesian_track(features_df, count_target, *, outbreak_threshold, strict_dependencies, bayesian_settings):
+        features_df
+        outbreak_threshold
+        strict_dependencies
+        bayesian_settings
+        n = len(count_target)
+        risk_frame = pd.DataFrame(
+            {
+                "risk_mean": [0.6] * n,
+                "risk_q05": [0.4] * n,
+                "risk_q95": [0.8] * n,
+                "threshold_cases": [1.0] * n,
+                "bayesian_risk": [0.6] * n,
+            }
+        )
+        return risk_frame, object(), {"degraded_mode": False, "fallback_used": False, "mode_used": "full_latent_ar"}
+
+    monkeypatch.setattr("run_pipeline._run_bayesian_track", fake_run_bayesian_track)
+    monkeypatch.setattr(
+        "run_pipeline._collect_bayesian_oof_scores",
+        lambda **kwargs: pd.Series([0.2, 0.8] * 6, index=kwargs["features_df"].index, dtype="float64"),
+    )
+    monkeypatch.setattr(
+        "run_pipeline.evaluate_bayesian_predictions",
+        lambda *args, **kwargs: {"brier_score": 0.2, "pr_auc": 0.6, "roc_auc": 0.7, "lead_time_mean": 1.0},
+    )
+    monkeypatch.setattr(
+        "run_pipeline.check_convergence",
+        lambda *args, **kwargs: {
+            "converged": False,
+            "divergences": 2.0,
+            "max_tree_depth": 14.0,
+            "r_hat_max": 1.2,
+            "ess_min": 20.0,
+            "divergence_threshold": 0.0,
+            "max_tree_depth_threshold": 12.0,
+            "rhat_threshold": 1.05,
+            "ess_threshold": 200.0,
+        },
+    )
+    monkeypatch.setattr(
+        "run_pipeline.extract_rhat_ess",
+        lambda _idata: pd.DataFrame({"parameter": ["x"], "r_hat": [1.2], "ess_bulk": [20.0]}),
+    )
+
+    artifacts = run(
+        raw_data_path=raw_path,
+        start_year=2016,
+        end_year=2016,
+        skip_baselines=True,
+        skip_visualizations=True,
+        strict_bayesian_deps=True,
+        bayesian_overrides={"draws": 20, "chains": 1},
+    )
+
+    risk_meta = json.loads(artifacts["bayesian_risk_metadata"].read_text(encoding="utf-8"))
+    assert risk_meta.get("convergence_failure_mode") == "warn"
+    assert risk_meta.get("convergence_failure_mode_explicit") is False
+    assert "auto-downgraded to warn" in str(risk_meta.get("convergence_failure_mode_auto_reason"))
+
+
+def test_bayesian_backend_metadata_truthful_cpu_fallback(tmp_path, monkeypatch) -> None:
+    synthetic = pd.DataFrame(
+        {
+            "date": pd.date_range("2016-01-01", periods=8, freq="W").astype(str),
+            "district": ["A", "A", "A", "A", "B", "B", "B", "B"],
+            "state": ["S"] * 8,
+            "cases": [1, 3, 7, 2, 4, 6, 8, 1],
+            "rainfall": [5.0, 2.0, 7.0, 9.0, 1.0, 0.0, 3.0, 2.0],
+            "temperature": [28.0, 29.0, 30.0, 31.0, 27.0, 26.0, 25.0, 24.0],
+            "humidity": [60.0, 62.0, 58.0, 57.0, 64.0, 66.0, 68.0, 65.0],
+        }
+    )
+    raw_path = tmp_path / "synthetic_backend_meta_raw.csv"
+    synthetic.to_csv(raw_path, index=False)
+
+    model_config_path = tmp_path / "model_config_backend_meta.yaml"
+    model_config_path.write_text(
+        "\n".join(
+            [
+                "compute_backend:",
+                "  mode: macos_metal",
+                "  prefer_gpu_for: both",
+                "  fallback: cpu",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "run_pipeline.runtime_backend.resolve_backends",
+        lambda _cfg: {
+            "baseline_backend": "cpu",
+            "bayesian_backend": "macos_metal",
+            "configured": True,
+            "requested": {"mode": "macos_metal", "prefer_gpu_for": "both", "fallback": "cpu", "configured": True},
+            "effective": {"baseline_backend": "cpu", "bayesian_backend": "macos_metal"},
+            "fallback": "cpu",
+            "fallback_used": True,
+            "reason_logs": [],
+            "capabilities": {"macos_metal": True, "nvidia_cuda": False, "details": {}},
+            "tracks": {},
+        },
+    )
+
+    def fake_run_bayesian_track(features_df, count_target, *, outbreak_threshold, strict_dependencies, bayesian_settings):
+        features_df
+        outbreak_threshold
+        strict_dependencies
+        bayesian_settings
+        n = len(count_target)
+        risk_frame = pd.DataFrame(
+            {
+                "risk_mean": [0.3] * n,
+                "risk_q05": [0.1] * n,
+                "risk_q95": [0.7] * n,
+                "threshold_cases": [1.0] * n,
+                "bayesian_risk": [0.3] * n,
+            }
+        )
+        return risk_frame, None, {
+            "degraded_mode": False,
+            "fallback_used": False,
+            "mode_used": "full_latent_ar",
+            "threshold_basis": "provided_series",
+            "threshold_default": 1.0,
+            "interval_source": "posterior",
+            "posterior_samples_used": 10,
+        }
+
+    monkeypatch.setattr("run_pipeline._run_bayesian_track", fake_run_bayesian_track)
+    monkeypatch.setattr(
+        "run_pipeline._collect_bayesian_oof_scores",
+        lambda **kwargs: pd.Series([0.4] * len(kwargs["features_df"]), index=kwargs["features_df"].index, dtype="float64"),
+    )
+
+    artifacts = run(
+        model_config_path=model_config_path,
+        raw_data_path=raw_path,
+        start_year=2016,
+        end_year=2016,
+        skip_baselines=True,
+        skip_visualizations=True,
+    )
+
+    risk_meta = json.loads(artifacts["bayesian_risk_metadata"].read_text(encoding="utf-8"))
+    run_meta = json.loads(artifacts["run_metadata"].read_text(encoding="utf-8"))
+
+    assert risk_meta.get("requested_backend") == "macos_metal"
+    assert risk_meta.get("resolved_backend") == "macos_metal"
+    assert risk_meta.get("actual_runtime_backend") == "cpu"
+    assert risk_meta.get("backend_implemented") is False
+    assert "does not currently support" in str(risk_meta.get("fallback_reason"))
+    assert risk_meta.get("sampling_backend_requested") == "auto"
+    assert risk_meta.get("sampling_backend_effective") == "pymc"
+    assert risk_meta.get("sampling_backend_fallback_reason") == risk_meta.get("fallback_reason")
+    assert risk_meta.get("actual_runtime_backend") == "cpu"
+
+    bayesian_backend_meta = run_meta.get("bayesian_backend", {})
+    assert bayesian_backend_meta.get("requested_backend") == "macos_metal"
+    assert bayesian_backend_meta.get("resolved_backend") == "macos_metal"
+    assert bayesian_backend_meta.get("actual_runtime_backend") == "cpu"
+    assert bayesian_backend_meta.get("backend_implemented") is False
+    assert bayesian_backend_meta.get("sampling_backend_requested") == "auto"
+    assert bayesian_backend_meta.get("sampling_backend_effective") == "pymc"
+    assert bayesian_backend_meta.get("sampling_backend_fallback_reason") == risk_meta.get("fallback_reason")
+    assert run_meta.get("sampling_backend_requested") == "auto"
+    assert run_meta.get("sampling_backend_effective") == "pymc"
+    assert run_meta.get("sampling_backend_fallback_reason") == risk_meta.get("fallback_reason")
+
+
+def test_runtime_sampling_backend_is_wired_into_bayesian_settings_and_metadata(tmp_path, monkeypatch) -> None:
+    synthetic = pd.DataFrame(
+        {
+            "date": pd.date_range("2016-01-01", periods=8, freq="W").astype(str),
+            "district": ["A", "A", "A", "A", "B", "B", "B", "B"],
+            "state": ["S"] * 8,
+            "cases": [1, 3, 7, 2, 4, 6, 8, 1],
+            "rainfall": [5.0, 2.0, 7.0, 9.0, 1.0, 0.0, 3.0, 2.0],
+            "temperature": [28.0, 29.0, 30.0, 31.0, 27.0, 26.0, 25.0, 24.0],
+            "humidity": [60.0, 62.0, 58.0, 57.0, 64.0, 66.0, 68.0, 65.0],
+        }
+    )
+    raw_path = tmp_path / "synthetic_runtime_sampling_raw.csv"
+    synthetic.to_csv(raw_path, index=False)
+
+    model_config_path = tmp_path / "model_config_runtime_sampling.yaml"
+    model_config_path.write_text(
+        "\n".join(
+            [
+                "runtime:",
+                "  sampling_backend: jax_numpyro",
+                "compute_backend:",
+                "  mode: cpu",
+                "  prefer_gpu_for: both",
+                "  fallback: cpu",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    observed_sampling_backends: list[str] = []
+
+    def fake_run_bayesian_track(features_df, count_target, *, outbreak_threshold, strict_dependencies, bayesian_settings):
+        features_df
+        count_target
+        outbreak_threshold
+        strict_dependencies
+        observed_sampling_backends.append(str(bayesian_settings.get("sampling_backend", "")))
+        n = len(features_df)
+        risk_frame = pd.DataFrame(
+            {
+                "risk_mean": [0.3] * n,
+                "risk_q05": [0.1] * n,
+                "risk_q95": [0.7] * n,
+                "threshold_cases": [1.0] * n,
+                "bayesian_risk": [0.3] * n,
+            }
+        )
+        return risk_frame, None, {
+            "degraded_mode": False,
+            "fallback_used": False,
+            "mode_used": "full_latent_ar",
+            "sampling_backend_requested": "jax_numpyro",
+            "sampling_backend_effective": "pymc",
+            "sampling_backend_fallback_reason": "JAX sampler unavailable; falling back to PyMC CPU sampler (test)",
+            "requested_backend": "cpu",
+            "resolved_backend": "cpu",
+            "actual_runtime_backend": "cpu",
+            "backend_implemented": True,
+            "fallback_reason": "JAX sampler unavailable; falling back to PyMC CPU sampler (test)",
+            "compute_backend_requested": "cpu",
+            "compute_backend_effective": "cpu",
+            "compute_backend_runtime": "cpu",
+            "compute_backend_fallback_used": True,
+            "compute_backend_fallback_reason": "JAX sampler unavailable; falling back to PyMC CPU sampler (test)",
+        }
+
+    monkeypatch.setattr("run_pipeline._run_bayesian_track", fake_run_bayesian_track)
+    monkeypatch.setattr(
+        "run_pipeline._collect_bayesian_oof_scores",
+        lambda **kwargs: pd.Series([0.4] * len(kwargs["features_df"]), index=kwargs["features_df"].index, dtype="float64"),
+    )
+
+    artifacts = run(
+        model_config_path=model_config_path,
+        raw_data_path=raw_path,
+        start_year=2016,
+        end_year=2016,
+        skip_baselines=True,
+        skip_visualizations=True,
+    )
+
+    assert observed_sampling_backends
+    assert observed_sampling_backends[0] == "jax_numpyro"
+
+    risk_meta = json.loads(artifacts["bayesian_risk_metadata"].read_text(encoding="utf-8"))
+    run_meta = json.loads(artifacts["run_metadata"].read_text(encoding="utf-8"))
+
+    assert risk_meta.get("sampling_backend_requested") == "jax_numpyro"
+    assert risk_meta.get("sampling_backend_effective") == "pymc"
+    assert "falling back" in str(risk_meta.get("sampling_backend_fallback_reason", "")).lower()
+    assert risk_meta.get("actual_runtime_backend") == "cpu"
+    assert run_meta.get("sampling_backend_requested") == "jax_numpyro"
+    assert run_meta.get("sampling_backend_effective") == "pymc"
+    assert "falling back" in str(run_meta.get("sampling_backend_fallback_reason", "")).lower()
+    assert run_meta.get("bayesian_backend", {}).get("sampling_backend_requested_source") == "runtime"
 
 
 def test_bayesian_convergence_summary_regenerates_and_updates(tmp_path, monkeypatch) -> None:

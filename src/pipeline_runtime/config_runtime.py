@@ -18,6 +18,17 @@ from src.pipeline_runtime.compute_backend import parse_compute_backend_config as
 
 LOGGER = logging.getLogger(__name__)
 
+_SUPPORTED_BAYESIAN_SAMPLING_BACKENDS: set[str] = {"auto", "pymc", "jax_numpyro"}
+_SUPPORTED_BAYESIAN_PROFILE_MODES: set[str] = {"cv", "final", "dev"}
+_BAYESIAN_PROFILE_KEYS: tuple[str, ...] = (
+    "chains",
+    "tune",
+    "draws",
+    "target_accept",
+    "max_treedepth",
+    "bayesian_progress",
+)
+
 
 @dataclass(frozen=True)
 class BayesianSubsetConfig:
@@ -91,6 +102,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bayesian-target-accept", type=float, default=None, help="Override Bayesian NUTS target_accept")
     parser.add_argument("--bayesian-max-treedepth", type=int, default=None, help="Override Bayesian NUTS max_treedepth")
     parser.add_argument(
+        "--bayesian-profile-mode",
+        type=str,
+        default=None,
+        choices=["cv", "final", "dev"],
+        help=(
+            "Optional Bayesian profile override mode. "
+            "When omitted, full-fit uses profile 'final' and OOF CV uses profile 'cv'."
+        ),
+    )
+    parser.add_argument(
         "--bayesian-progress",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -134,6 +155,20 @@ def parse_args() -> argparse.Namespace:
 def build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[str, Any]) -> Any:
     from src.models.bayesian.hierarchical_model import BayesianModelConfig
 
+    raw_convergence_failure_mode = bayesian_settings.get("convergence_failure_mode", BayesianModelConfig.convergence_failure_mode)
+    convergence_failure_mode = str(raw_convergence_failure_mode).strip().lower()
+    if convergence_failure_mode not in {"strict", "warn"}:
+        LOGGER.warning(
+            "Invalid bayesian_model.convergence_failure_mode '%s'; using '%s'",
+            raw_convergence_failure_mode,
+            BayesianModelConfig.convergence_failure_mode,
+        )
+        convergence_failure_mode = BayesianModelConfig.convergence_failure_mode
+
+    sampling_backend = normalize_sampling_backend(
+        bayesian_settings.get("sampling_backend", BayesianModelConfig.sampling_backend)
+    )
+
     return BayesianModelConfig(
         strict_dependencies=strict_dependencies,
         draws=int(bayesian_settings.get("draws", BayesianModelConfig.draws)),
@@ -155,6 +190,8 @@ def build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[str
         ess_warn_threshold=float(bayesian_settings.get("ess_warn_threshold", BayesianModelConfig.ess_warn_threshold)),
         random_seed=int(bayesian_settings.get("random_seed", BayesianModelConfig.random_seed)),
         force_full_bayesian=bool(bayesian_settings.get("force_full_bayesian", BayesianModelConfig.force_full_bayesian)),
+        convergence_failure_mode=convergence_failure_mode,
+        sampling_backend=sampling_backend,
         outbreak_threshold_default_cases=float(
             bayesian_settings.get(
                 "outbreak_threshold_default_cases",
@@ -163,6 +200,18 @@ def build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[str
         ),
         posterior_sample_cap=int(bayesian_settings.get("posterior_sample_cap", BayesianModelConfig.posterior_sample_cap)),
     )
+
+
+def normalize_sampling_backend(raw_value: Any, default: str = "auto") -> str:
+    normalized = str(raw_value if raw_value is not None else default).strip().lower()
+    if normalized not in _SUPPORTED_BAYESIAN_SAMPLING_BACKENDS:
+        LOGGER.warning(
+            "Invalid bayesian_model.sampling_backend '%s'; using '%s'",
+            raw_value,
+            default,
+        )
+        return str(default)
+    return normalized
 
 
 def load_yaml_config(config_path: Path) -> dict[str, Any]:
@@ -371,6 +420,106 @@ def parse_memory_optimization_config(raw_model_config: dict[str, Any] | None) ->
         district_shard_index=district_shard_index,
         bayesian_subset=bayesian_subset,
     )
+
+
+def normalize_bayesian_profile_mode(raw_mode: Any) -> str | None:
+    if raw_mode is None:
+        return None
+    normalized = str(raw_mode).strip().lower()
+    if not normalized or normalized in {"auto", "default", "none"}:
+        return None
+    if normalized not in _SUPPORTED_BAYESIAN_PROFILE_MODES:
+        LOGGER.warning(
+            "Invalid bayesian profile mode '%s'; ignoring override and using default profile routing",
+            raw_mode,
+        )
+        return None
+    return normalized
+
+
+def _sanitize_bayesian_profile(raw_profile: Any) -> dict[str, Any]:
+    if not isinstance(raw_profile, dict):
+        return {}
+    return {key: raw_profile[key] for key in _BAYESIAN_PROFILE_KEYS if key in raw_profile}
+
+
+def _profile_diff_keys(fullfit_settings: dict[str, Any], cv_settings: dict[str, Any]) -> list[str]:
+    different: list[str] = []
+    for key in _BAYESIAN_PROFILE_KEYS:
+        if fullfit_settings.get(key) != cv_settings.get(key):
+            different.append(key)
+    return sorted(different)
+
+
+def resolve_bayesian_profile_settings(
+    *,
+    bayesian_settings: dict[str, Any],
+    bayesian_profiles: dict[str, Any] | None,
+    profile_mode: str | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    base_settings = dict(bayesian_settings) if isinstance(bayesian_settings, dict) else {}
+    raw_profiles = bayesian_profiles if isinstance(bayesian_profiles, dict) else {}
+
+    profile_cv = _sanitize_bayesian_profile(raw_profiles.get("cv"))
+    profile_final = _sanitize_bayesian_profile(raw_profiles.get("final"))
+    profile_dev = _sanitize_bayesian_profile(raw_profiles.get("dev"))
+    normalized_mode = normalize_bayesian_profile_mode(profile_mode)
+
+    warning_flags: list[str] = []
+    if normalized_mode == "dev":
+        fullfit_profile_name = "dev"
+        cv_profile_name = "dev"
+        fullfit_overlay = profile_dev
+        cv_overlay = profile_dev
+        if not profile_dev:
+            warning_flags.append("dev_profile_missing_fallback_to_base_settings")
+    elif normalized_mode == "cv":
+        fullfit_profile_name = "cv"
+        cv_profile_name = "cv"
+        fullfit_overlay = profile_cv
+        cv_overlay = profile_cv
+        if not profile_cv:
+            warning_flags.append("cv_profile_missing_fallback_to_base_settings")
+    elif normalized_mode == "final":
+        fullfit_profile_name = "final"
+        cv_profile_name = "final"
+        fullfit_overlay = profile_final
+        cv_overlay = profile_final
+        if not profile_final:
+            warning_flags.append("final_profile_missing_fallback_to_base_settings")
+    else:
+        fullfit_profile_name = "final"
+        cv_profile_name = "cv"
+        fullfit_overlay = profile_final
+        cv_overlay = profile_cv if profile_cv else profile_final
+        if not profile_final:
+            warning_flags.append("final_profile_missing_fallback_to_base_settings")
+        if not profile_cv:
+            warning_flags.append("cv_profile_missing_fallback_to_final_or_base_settings")
+
+    fullfit_effective = {**base_settings, **fullfit_overlay}
+    cv_effective = {**base_settings, **cv_overlay}
+    diff_keys = _profile_diff_keys(fullfit_effective, cv_effective)
+
+    metadata = {
+        "profile_mode_override": normalized_mode,
+        "default_routing": "fullfit=final,oof=cv",
+        "fullfit_profile_name": fullfit_profile_name,
+        "oof_profile_name": cv_profile_name,
+        "declared_profiles": {
+            "cv": profile_cv,
+            "final": profile_final,
+            "dev": profile_dev,
+        },
+        "effective_profile_values": {
+            "fullfit": {key: fullfit_effective.get(key) for key in _BAYESIAN_PROFILE_KEYS},
+            "oof": {key: cv_effective.get(key) for key in _BAYESIAN_PROFILE_KEYS},
+        },
+        "cv_profile_differs_from_final": bool(diff_keys),
+        "cv_vs_final_diff_keys": diff_keys,
+        "warning_flags": sorted(set(warning_flags)),
+    }
+    return fullfit_effective, cv_effective, metadata
 
 
 def call_load_data_compat(
