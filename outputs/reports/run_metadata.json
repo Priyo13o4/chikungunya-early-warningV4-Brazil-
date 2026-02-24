@@ -1,6 +1,6 @@
 {
-  "run_id": "20260223T135230Z-fdaae705",
-  "started_at_utc": "2026-02-23T13:52:30.207318+00:00",
+  "run_id": "20260224T062159Z-fbc5eb9d",
+  "started_at_utc": "2026-02-24T06:21:59.467706+00:00",
   "effective_seed": 42,
   "model_config_path": "config/model_config.yaml",
   "adapter_config_path": "projects/brazil_chik/config.yaml",
@@ -12,13 +12,13 @@
     "test_size": 12,
     "date_column": "date",
     "target_column": "outbreak_label",
-    "first_valid_year": 2014,
-    "last_valid_year": 2025,
+    "first_valid_year": 2016,
+    "last_valid_year": 2020,
+    "start_train_year": 2015,
+    "thesis_strict": true,
     "train_window_years": 5,
     "skip_single_class_folds": true,
-    "minimum_evaluated_folds": 3,
-    "start_train_year": 2009,
-    "thesis_strict": false
+    "minimum_evaluated_folds": 3
   },
   "adapter": {
     "enabled": true,
@@ -32,47 +32,47 @@
     "brazil_adapter_active": true
   },
   "bayesian_mode_control": {
-    "force_full_requested": true,
-    "force_full_effective": true,
+    "force_full_requested": false,
+    "force_full_effective": false,
     "brazil_adapter_active": true,
     "bayesian_simplified_mode": false,
     "max_convergence_retries": 0,
-    "convergence_failure_mode": "warn"
+    "convergence_failure_mode": "strict"
   },
   "bayesian_backend": {
     "requested_backend": "auto",
-    "resolved_backend": "macos_metal",
+    "resolved_backend": "nvidia_cuda",
     "actual_runtime_backend": "cpu",
     "backend_implemented": false,
-    "fallback_reason": "Bayesian implementation does not currently support 'macos_metal' execution; using CPU runtime path",
+    "fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
     "sampling_backend_requested": "auto",
     "sampling_backend_effective": "pymc",
-    "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'macos_metal' execution; using CPU runtime path",
+    "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
     "sampling_backend_requested_source": "bayesian_model"
   },
   "sampling_backend_requested": "auto",
   "sampling_backend_effective": "pymc",
-  "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'macos_metal' execution; using CPU runtime path",
+  "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
   "bayesian_profile_usage": {
-    "profile_mode_override": "dev",
+    "profile_mode_override": null,
     "default_routing": "fullfit=final,oof=cv",
-    "fullfit_profile_name": "dev",
-    "oof_profile_name": "dev",
+    "fullfit_profile_name": "final",
+    "oof_profile_name": "cv",
     "declared_profiles": {
       "cv": {
         "chains": 2,
-        "tune": 600,
-        "draws": 400,
-        "target_accept": 0.95,
-        "max_treedepth": 12,
+        "tune": 500,
+        "draws": 500,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
         "bayesian_progress": false
       },
       "final": {
         "chains": 2,
-        "tune": 1200,
-        "draws": 800,
-        "target_accept": 0.99,
-        "max_treedepth": 14,
+        "tune": 500,
+        "draws": 500,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
         "bayesian_progress": true
       },
       "dev": {
@@ -86,24 +86,26 @@
     },
     "effective_profile_values": {
       "fullfit": {
-        "chains": 1,
-        "tune": 100,
-        "draws": 80,
+        "chains": 2,
+        "tune": 500,
+        "draws": 500,
         "target_accept": 0.9,
         "max_treedepth": 10,
-        "bayesian_progress": false
+        "bayesian_progress": true
       },
       "oof": {
-        "chains": 1,
-        "tune": 100,
-        "draws": 80,
+        "chains": 2,
+        "tune": 500,
+        "draws": 500,
         "target_accept": 0.9,
         "max_treedepth": 10,
         "bayesian_progress": false
       }
     },
-    "cv_profile_differs_from_final": false,
-    "cv_vs_final_diff_keys": [],
+    "cv_profile_differs_from_final": true,
+    "cv_vs_final_diff_keys": [
+      "bayesian_progress"
+    ],
     "warning_flags": [],
     "cv_subset_mode_active": false
   },
@@ -116,31 +118,30 @@
       "configured": true
     },
     "effective": {
-      "baseline_backend": "macos_metal",
-      "bayesian_backend": "macos_metal"
+      "baseline_backend": "nvidia_cuda",
+      "bayesian_backend": "nvidia_cuda"
     },
-    "baseline_backend": "macos_metal",
-    "bayesian_backend": "macos_metal",
+    "baseline_backend": "nvidia_cuda",
+    "bayesian_backend": "nvidia_cuda",
     "fallback": "cpu",
     "fallback_used": false,
     "reason_logs": [],
     "capabilities": {
-      "macos_metal": true,
-      "nvidia_cuda": false,
+      "macos_metal": false,
+      "nvidia_cuda": true,
       "details": {
-        "platform": "Darwin",
+        "platform": "Linux",
         "macos_metal": {
-          "platform": "Darwin",
-          "probes": [
-            {
-              "source": "xcrun -f metal",
-              "returncode": 0,
-              "stdout": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"
-            }
-          ]
+          "reason": "non_macos"
         },
         "nvidia_cuda": {
-          "probes": []
+          "probes": [
+            {
+              "source": "nvidia-smi -L",
+              "returncode": 0,
+              "stdout": "GPU 0: NVIDIA L4 (UUID: GPU-5c0f6212-e60f-129b-14b2-5c7fbf1d82c2)"
+            }
+          ]
         }
       }
     },
@@ -149,7 +150,7 @@
         "track": "baseline",
         "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "macos_metal",
+        "effective_backend": "nvidia_cuda",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
@@ -158,7 +159,7 @@
         "track": "bayesian",
         "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "macos_metal",
+        "effective_backend": "nvidia_cuda",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
@@ -176,8 +177,8 @@
       "strategy": "recent_years"
     },
     "active": false,
-    "rows_before": 289276,
-    "rows_after": 289276
+    "rows_before": 1741219,
+    "rows_after": 1741219
   },
   "reproducibility": {
     "effective_cli_args": {
@@ -186,24 +187,24 @@
       "cv_config": "config/cv_config.yaml",
       "raw_data": "data/raw/Epiclim_Final_data.csv",
       "population_data": null,
-      "start_year": 2020,
+      "start_year": 2015,
       "end_year": 2020,
       "selected_percentile": 75,
       "skip_baselines": false,
       "skip_bayesian": false,
-      "skip_visualizations": true,
+      "skip_visualizations": false,
       "decision_cost": 0.2,
       "decision_loss": 1.0,
       "lead_time_max_lookback_steps": 8,
       "strict_bayesian_deps": false,
       "strict_feature_gate": false,
-      "bayesian_draws": null,
-      "bayesian_tune": null,
-      "bayesian_chains": null,
+      "bayesian_draws": 500,
+      "bayesian_tune": 500,
+      "bayesian_chains": 2,
       "bayesian_target_accept": null,
       "bayesian_max_treedepth": null,
-      "bayesian_profile_mode": "dev",
-      "bayesian_progress": null,
+      "bayesian_profile_mode": null,
+      "bayesian_progress": true,
       "bayesian_simplified_mode": false,
       "force_full_bayesian": false,
       "export_detailed_csv": false,
@@ -211,13 +212,13 @@
       "log_level": "INFO",
       "seed": null
     },
-    "git_commit_sha": "08752b411489e5762e15618c4931b62fc7015884",
-    "python_version": "3.14.3 (main, Feb  3 2026, 15:32:20) [Clang 17.0.0 (clang-1700.6.3.2)]",
+    "git_commit_sha": "50865127da77c382b93bb231d820d217e3ef0a9c",
+    "python_version": "3.10.17 | packaged by conda-forge | (main, Apr 10 2025, 22:19:12) [GCC 13.3.0]",
     "input_hashes_sha256": {
-      "raw_data": "e9af9376881e47e0f479357b7757b6f286f729f8efe7d5b6e95b9fe5ebd0243f",
-      "model_config": "255113a5b0869831f878ae7352bc977dac0934a778bcb098d4bc730357652ddc",
-      "adapter_config": "531dd8a3a14ffa4d7f48e80a97ee985c8a10a420ee9f72f66cfaa9f580bc1ab8",
-      "cv_config": "1ed94638da7008fbe8558497be172feb23e622cf138ab49c353a709f7c43422e"
+      "raw_data": "7b70a3d47d9ac83d4eac635db16a7b543949754a5614ddd1ed355ffa0422833d",
+      "model_config": "e9a3f08db6643294d996707b15df6ba80d4c10575f175524bf70a34860d3cc9a",
+      "adapter_config": "b55b8c57fe8c18701ce905a93cefeb61c26a47f26fdf3173a336bbe74e805420",
+      "cv_config": "d823a16af3792c192c8c7aaec2cd18ee5aaaca47935c5b84aeba073a1a3d0fa9"
     }
   }
 }

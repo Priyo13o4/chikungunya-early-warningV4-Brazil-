@@ -4,8 +4,10 @@ gap: 0
 test_size: 12
 date_column: date
 target_column: outbreak_label
-first_valid_year: 2014
-last_valid_year: 2025
+first_valid_year: 2016
+last_valid_year: 2020
+start_train_year: 2015
+thesis_strict: true
 train_window_years: 5
 skip_single_class_folds: true
 minimum_evaluated_folds: 3

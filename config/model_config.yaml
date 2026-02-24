@@ -11,7 +11,6 @@ baseline_models:
   - rule_based_threshold
   - logistic_regression
   - poisson_regression
-  - negative_binomial_regression
   - random_forest
   - xgboost
   - lightgbm
@@ -19,12 +18,12 @@ bayesian_model:
   name: hierarchical_poisson
   # sampling_backend: auto|pymc|jax_numpyro
   sampling_backend: auto
-  draws: 800
-  tune: 1200
+  draws: 500
+  tune: 500
   chains: 2
   bayesian_progress: true
-  target_accept: 0.99
-  max_treedepth: 14
+  target_accept: 0.9
+  max_treedepth: 10
   force_full_bayesian: false
   # Optional: strict|warn. If omitted, strict applies only in strict/full runs;
   # low-sample smoke settings (chains < 2 or draws < 50) auto-downgrade to warn.
@@ -35,22 +34,23 @@ bayesian_model:
   rhat_warn_threshold: 1.05
   ess_warn_threshold: 200.0
   outbreak_threshold_default_cases: 1.0
-  posterior_sample_cap: 400
+  posterior_sample_cap: 300
+  predictive_chunk_rows: 4000
 
 bayesian_model_profiles:
   cv:
     chains: 2
-    tune: 600
-    draws: 400
-    target_accept: 0.95
-    max_treedepth: 12
+    tune: 500
+    draws: 500
+    target_accept: 0.9
+    max_treedepth: 10
     bayesian_progress: false
   final:
     chains: 2
-    tune: 1200
-    draws: 800
-    target_accept: 0.99
-    max_treedepth: 14
+    tune: 500
+    draws: 500
+    target_accept: 0.9
+    max_treedepth: 10
     bayesian_progress: true
   dev:
     chains: 1

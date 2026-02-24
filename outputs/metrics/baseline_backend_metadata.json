@@ -1,15 +1,14 @@
 {
-  "run_id": "20260223T135230Z-fdaae705",
-  "compute_backend_effective": "macos_metal",
-  "skip_baselines": true,
+  "run_id": "20260224T062159Z-fbc5eb9d",
+  "compute_backend_effective": "nvidia_cuda",
+  "skip_baselines": false,
   "model_names": [
     "rule_based_threshold",
     "logistic_regression",
     "poisson_regression",
-    "negative_binomial_regression",
     "random_forest",
     "xgboost",
     "lightgbm"
   ],
-  "training_config_path": "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4/outputs/models/baselines/training_config.json"
+  "training_config_path": "/home/priyodip/chikungunya-early-warningV4-Brazil-/outputs/models/baselines/training_config.json"
 }

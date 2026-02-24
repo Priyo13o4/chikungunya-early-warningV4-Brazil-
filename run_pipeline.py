@@ -199,6 +199,9 @@ def _build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[st
         posterior_sample_cap=int(
             bayesian_settings.get("posterior_sample_cap", BayesianModelConfig.posterior_sample_cap)
         ),
+        predictive_chunk_rows=int(
+            bayesian_settings.get("predictive_chunk_rows", BayesianModelConfig.predictive_chunk_rows)
+        ),
     )
 
 

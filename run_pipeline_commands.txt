@@ -1,37 +1,68 @@
-# Chikungunya EWS - Run Commands (copy/paste-safe)
-# Run from project root:
-# /Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4
+# Chikungunya EWS - Run Commands (tmux-friendly, separated steps)
+# Workspace root:
+# /home/priyodip/chikungunya-early-warningV4-Brazil-
 
-# 0) Activate env + load .env
-source .venv/bin/activate
-set -a && source .env && set +a
+# ============================================================
+# A) One-time prep in your shell
+# ============================================================
+cd /home/priyodip/chikungunya-early-warningV4-Brazil-
+mkdir -p outputs/logs
 
-# 1) Full thesis run (visible output, 2 chains, progress bar)
+# ============================================================
+# B) Create and enter tmux session
+# ============================================================
+tmux new -s chik_run
+
+# If session already exists, attach:
+# tmux attach -t chik_run
+
+# ============================================================
+# C) Inside tmux: activate environment
+# ============================================================
+cd /home/priyodip/chikungunya-early-warningV4-Brazil-
+source scripts/activate_vm_env.sh
+
+# Optional (only if you use .env locally):
+# set -a
+# source .env
+# set +a
+
+# ============================================================
+# D1) Inside tmux: full run (2 chains, 1000 iterations total = 500 tune + 500 draws)
+# ============================================================
 python -u run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --model-config config/model_config.yaml \
   --cv-config config/cv_config.yaml \
   --raw-data data/raw/Epiclim_Final_data.csv \
   --start-year 2015 \
-  --end-year 2025 \
+  --end-year 2020 \
   --selected-percentile 75 \
   --bayesian-chains 2 \
+  --bayesian-tune 500 \
+  --bayesian-draws 500 \
   --bayesian-progress
 
-# 2) Full run but faster (skip visualizations)
+# ============================================================
+# D2) Inside tmux: full run + skip visualizations (faster)
+# ============================================================
 python -u run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --model-config config/model_config.yaml \
   --cv-config config/cv_config.yaml \
   --raw-data data/raw/Epiclim_Final_data.csv \
   --start-year 2015 \
-  --end-year 2025 \
+  --end-year 2020 \
   --selected-percentile 75 \
   --skip-visualizations \
   --bayesian-chains 2 \
+  --bayesian-tune 500 \
+  --bayesian-draws 500 \
   --bayesian-progress
 
-# 3) Quick dev smoke run (2020 only, dev profile)
+# ============================================================
+# D3) Inside tmux: quick dev smoke run
+# ============================================================
 python -u run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --model-config config/model_config.yaml \
@@ -44,8 +75,49 @@ python -u run_pipeline.py \
   --bayesian-profile-mode dev \
   --bayesian-progress
 
-# 4) If you still get a path error, verify these files exist:
-# - projects/brazil_chik/config.yaml
-# - config/model_config.yaml
-# - config/cv_config.yaml
-# - data/raw/Epiclim_Final_data.csv
+# ============================================================
+# E) tmux controls
+# ============================================================
+# Detach from session (leave run active):
+# Ctrl+b then d
+
+# Re-attach later:
+# tmux attach -t chik_run
+
+# List sessions:
+# tmux ls
+
+# ============================================================
+# F) Optional live monitoring from another shell
+# ============================================================
+nvidia-smi
+free -h
+ps -ef | grep run_pipeline.py | grep -v grep
+
+# ============================================================
+# G) Stop run safely
+# ============================================================
+# Inside tmux where pipeline is running:
+# Ctrl+c
+
+# Or from another shell:
+# pkill -f "python -u run_pipeline.py"
+
+# ============================================================
+# H) Path sanity check (if errors occur)
+# ============================================================
+# projects/brazil_chik/config.yaml
+# config/model_config.yaml
+# config/cv_config.yaml
+# data/raw/Epiclim_Final_data.csv
+
+4. Enable Mouse Scrolling (Optional but highly recommended)
+If you want to use your Mac's trackpad to scroll up and read old print statements inside the tmux window:
+
+Press Ctrl + b
+
+Release both keys.
+
+Type : (Shift + semicolon). A yellow prompt will appear at the very bottom.
+
+Type set -g mouse on and press Enter

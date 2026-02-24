@@ -57,6 +57,7 @@ class BayesianModelConfig:
     sampling_backend: str = "auto"
     outbreak_threshold_default_cases: float = 1.0
     posterior_sample_cap: int = 400
+    predictive_chunk_rows: int = 20000
 
 
 @dataclass
@@ -309,11 +310,11 @@ class HierarchicalBayesianModel:
             )
             district_idx = np.where(district_idx >= 0, district_idx, 0)
 
-            district_component = alpha_draws[:, district_idx].T
-            beta_component = np.dot(x_scaled, beta_draws.T)
-
             if "z_t" in posterior:
-                z_draws = np.asarray(posterior["z_t"].to_numpy(), dtype=float).reshape(-1, posterior["z_t"].shape[-1])
+                z_draws = np.asarray(posterior["z_t"].to_numpy(), dtype=np.float32).reshape(
+                    -1,
+                    posterior["z_t"].shape[-1],
+                )
                 if n_samples_total > sample_cap:
                     z_draws = z_draws[sample_idx]
                 time_coord = posterior["z_t"].coords["time"].to_numpy()
@@ -327,28 +328,68 @@ class HierarchicalBayesianModel:
                         ],
                         dtype=int,
                     )
-                    time_component = z_draws[:, obs_time_idx].T
                 else:
-                    time_component = np.zeros_like(beta_component)
+                    obs_time_idx = np.full(len(frame), 0, dtype=int)
             else:
-                time_component = np.zeros_like(beta_component)
+                z_draws = None
+                obs_time_idx = np.zeros(len(frame), dtype=int)
 
-            linear_draws = district_component + beta_component + time_component
-            mu_draws = np.exp(np.clip(linear_draws, a_min=-20.0, a_max=20.0))
+            n_rows = len(frame)
+            n_samples = int(alpha_nb_draws.shape[0])
+            element_budget = 4_000_000
+            configured_chunk_rows = max(1, int(self.config.predictive_chunk_rows))
+            max_rows_by_budget = max(1, int(element_budget // max(1, n_samples)))
+            chunk_rows = min(configured_chunk_rows, max_rows_by_budget)
 
-            risk_draws = np.empty_like(mu_draws)
-            for sample_id in range(mu_draws.shape[1]):
-                risk_draws[:, sample_id] = self._nb_exceedance_probability(
-                    mu_draws[:, sample_id],
-                    np.full(len(frame), alpha_nb_draws[sample_id], dtype=float),
-                    threshold_values,
-                )
+            LOGGER.info(
+                "Posterior predictive uncertainty in chunks: rows=%d, samples=%d, chunk_rows=%d",
+                n_rows,
+                n_samples,
+                chunk_rows,
+            )
+
+            risk_mean = np.empty(n_rows, dtype=np.float64)
+            risk_q05 = np.empty(n_rows, dtype=np.float64)
+            risk_q95 = np.empty(n_rows, dtype=np.float64)
+
+            alpha_draws_f32 = alpha_draws.astype(np.float32, copy=False)
+            beta_draws_f32 = beta_draws.astype(np.float32, copy=False)
+            alpha_nb_draws_f32 = alpha_nb_draws.astype(np.float32, copy=False)
+            x_scaled_f32 = x_scaled.astype(np.float32, copy=False)
+            threshold_values_f32 = threshold_values.astype(np.float32, copy=False)
+
+            for start in range(0, n_rows, chunk_rows):
+                end = min(start + chunk_rows, n_rows)
+                row_slice = slice(start, end)
+
+                district_component = alpha_draws_f32[:, district_idx[row_slice]].T
+                beta_component = np.dot(x_scaled_f32[row_slice], beta_draws_f32.T)
+                if z_draws is not None:
+                    time_component = z_draws[:, obs_time_idx[row_slice]].T
+                else:
+                    time_component = 0.0
+
+                linear_draws = district_component + beta_component + time_component
+                mu_draws = np.exp(np.clip(linear_draws, a_min=-20.0, a_max=20.0)).astype(np.float32, copy=False)
+
+                risk_draws = np.empty_like(mu_draws, dtype=np.float32)
+                threshold_chunk = threshold_values_f32[row_slice]
+                for sample_id in range(n_samples):
+                    risk_draws[:, sample_id] = self._nb_exceedance_probability(
+                        mu_draws[:, sample_id],
+                        np.full(end - start, alpha_nb_draws_f32[sample_id], dtype=np.float32),
+                        threshold_chunk,
+                    ).astype(np.float32, copy=False)
+
+                risk_mean[row_slice] = np.mean(risk_draws, axis=1, dtype=np.float64)
+                risk_q05[row_slice] = np.quantile(risk_draws, 0.05, axis=1)
+                risk_q95[row_slice] = np.quantile(risk_draws, 0.95, axis=1)
 
             risk_frame = pd.DataFrame(
                 {
-                    "risk_mean": np.mean(risk_draws, axis=1),
-                    "risk_q05": np.quantile(risk_draws, 0.05, axis=1),
-                    "risk_q95": np.quantile(risk_draws, 0.95, axis=1),
+                    "risk_mean": risk_mean,
+                    "risk_q05": risk_q05,
+                    "risk_q95": risk_q95,
                     "threshold_cases": threshold_values,
                 },
                 index=frame.index,
@@ -357,7 +398,7 @@ class HierarchicalBayesianModel:
             metadata = {
                 **threshold_meta,
                 "interval_source": "posterior",
-                "posterior_samples_used": int(mu_draws.shape[1]),
+                "posterior_samples_used": int(n_samples),
                 "degraded_mode": False,
             }
             return risk_frame, metadata

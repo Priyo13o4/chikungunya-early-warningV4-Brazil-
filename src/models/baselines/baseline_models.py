@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import logging
 import re
 from typing import Any
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,16 @@ MODEL_ALIASES: dict[str, str] = {
     "lightgbm": "lightgbm",
 }
 
+NON_PREDICTIVE_IDENTIFIER_COLUMNS: set[str] = {
+    "district",
+    "state",
+    "date",
+    "municipality_id",
+    "municipality",
+    "state_code",
+    "uf",
+}
+
 
 def _to_numeric_target(y: pd.Series) -> pd.Series:
     values = pd.to_numeric(y, errors="coerce").fillna(0.0)
@@ -46,7 +57,24 @@ def _to_float_matrix(frame: pd.DataFrame) -> pd.DataFrame:
         return matrix
     for column in matrix.columns:
         matrix[column] = pd.to_numeric(matrix[column], errors="coerce").fillna(0.0)
+        matrix[column] = matrix[column].replace([np.inf, -np.inf], 0.0)
     return matrix.astype(float)
+
+
+def _as_numpy(values: Any) -> np.ndarray:
+    if isinstance(values, np.ndarray):
+        return values
+    if hasattr(values, "to_numpy"):
+        try:
+            return np.asarray(values.to_numpy())
+        except Exception:
+            pass
+    if hasattr(values, "get"):
+        try:
+            return np.asarray(values.get())
+        except Exception:
+            pass
+    return np.asarray(values)
 
 
 @dataclass
@@ -119,6 +147,16 @@ class BaselineModel:
         if not self.encoded_columns_:
             return encoded
         return encoded.reindex(columns=self.encoded_columns_, fill_value=0.0)
+
+    def _drop_identifier_columns(self, frame: pd.DataFrame) -> pd.DataFrame:
+        drop_candidates = [
+            column
+            for column in frame.columns
+            if str(column).strip().lower() in NON_PREDICTIVE_IDENTIFIER_COLUMNS
+        ]
+        if not drop_candidates:
+            return frame
+        return frame.drop(columns=drop_candidates, errors="ignore")
 
     def _uses_booster_name_constraints(self) -> bool:
         return self._normalize_name() in {"xgboost", "lightgbm"}
@@ -226,29 +264,102 @@ class BaselineModel:
             self.fitted_ = True
             return self
 
-        matrix = self._encode_features(X, fit=True)
+        model_frame = self._drop_identifier_columns(X)
+        matrix = self._encode_features(model_frame, fit=True)
         matrix = self._apply_feature_name_sanitization(matrix, fit=True)
         matrix = _to_float_matrix(matrix)
 
         try:
             if model_name == "logistic_regression":
                 from sklearn.linear_model import LogisticRegression
+                from sklearn.exceptions import ConvergenceWarning
 
-                estimator = LogisticRegression(
-                    C=1.0,
-                    class_weight="balanced",
-                    max_iter=1000,
-                    random_state=self.random_state,
-                    solver="lbfgs",
-                )
-                estimator.fit(matrix, y_numeric)
+                estimator: Any
+                if self._normalized_compute_backend() == "nvidia_cuda":
+                    try:
+                        import cupy as cp
+                        from cuml.linear_model import LogisticRegression as CuMLLogisticRegression
+
+                        estimator = CuMLLogisticRegression(
+                            C=1.0,
+                            max_iter=5000,
+                            tol=1e-3,
+                            fit_intercept=True,
+                        )
+                        x_gpu = cp.asarray(matrix.to_numpy(dtype=np.float32, copy=False))
+                        y_gpu = cp.asarray(y_numeric.to_numpy(dtype=np.int32, copy=False))
+                        estimator.fit(x_gpu, y_gpu)
+                    except Exception as gpu_error:
+                        LOGGER.warning(
+                            "Model '%s': cuML logistic unavailable (%s); retrying on CPU",
+                            self.name,
+                            gpu_error,
+                        )
+                        estimator = LogisticRegression(
+                            C=1.0,
+                            class_weight="balanced",
+                            max_iter=5000,
+                            random_state=self.random_state,
+                            solver="saga",
+                            tol=1e-3,
+                            n_jobs=-1,
+                        )
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                            estimator.fit(matrix, y_numeric)
+                else:
+                    estimator = LogisticRegression(
+                        C=1.0,
+                        class_weight="balanced",
+                        max_iter=5000,
+                        random_state=self.random_state,
+                        solver="saga",
+                        tol=1e-3,
+                        n_jobs=-1,
+                    )
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                        estimator.fit(matrix, y_numeric)
                 self.estimator_ = estimator
 
             elif model_name == "poisson_regression":
                 from sklearn.linear_model import PoissonRegressor
+                from sklearn.exceptions import ConvergenceWarning
 
-                estimator = PoissonRegressor(alpha=1e-3, max_iter=500)
-                estimator.fit(matrix, y_numeric)
+                estimator: Any
+                if self._normalized_compute_backend() == "nvidia_cuda":
+                    try:
+                        from xgboost import XGBRegressor
+
+                        estimator = XGBRegressor(
+                            n_estimators=300,
+                            learning_rate=0.05,
+                            max_depth=4,
+                            subsample=0.8,
+                            colsample_bytree=0.8,
+                            objective="count:poisson",
+                            eval_metric="poisson-nloglik",
+                            random_state=self.random_state,
+                            n_jobs=1,
+                            tree_method="hist",
+                            device="cuda",
+                        )
+                        estimator.fit(matrix, y_numeric)
+                    except Exception as gpu_error:
+                        LOGGER.warning(
+                            "Model '%s': GPU poisson unavailable (%s); retrying sklearn Poisson",
+                            self.name,
+                            gpu_error,
+                        )
+                        estimator = PoissonRegressor(alpha=1e-3, max_iter=2000)
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                            estimator.fit(matrix, y_numeric)
+                else:
+                    estimator = PoissonRegressor(alpha=1e-3, max_iter=2000)
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                        estimator.fit(matrix, y_numeric)
                 self.estimator_ = estimator
 
             elif model_name == "negative_binomial_regression":
@@ -280,15 +391,46 @@ class BaselineModel:
             elif model_name == "random_forest":
                 from sklearn.ensemble import RandomForestClassifier
 
-                estimator = RandomForestClassifier(
-                    n_estimators=200,
-                    max_depth=10,
-                    min_samples_leaf=2,
-                    class_weight="balanced_subsample",
-                    n_jobs=-1,
-                    random_state=self.random_state,
-                )
-                estimator.fit(matrix, y_numeric.astype(int))
+                estimator: Any
+                if self._normalized_compute_backend() == "nvidia_cuda":
+                    try:
+                        import cupy as cp
+                        from cuml.ensemble import RandomForestClassifier as CuMLRandomForestClassifier
+
+                        estimator = CuMLRandomForestClassifier(
+                            n_estimators=300,
+                            max_depth=12,
+                            n_streams=4,
+                            random_state=self.random_state,
+                        )
+                        x_gpu = cp.asarray(matrix.to_numpy(dtype=np.float32, copy=False))
+                        y_gpu = cp.asarray(y_numeric.to_numpy(dtype=np.int32, copy=False))
+                        estimator.fit(x_gpu, y_gpu)
+                    except Exception as gpu_error:
+                        LOGGER.warning(
+                            "Model '%s': cuML random forest unavailable (%s); retrying on CPU",
+                            self.name,
+                            gpu_error,
+                        )
+                        estimator = RandomForestClassifier(
+                            n_estimators=200,
+                            max_depth=10,
+                            min_samples_leaf=2,
+                            class_weight="balanced_subsample",
+                            n_jobs=-1,
+                            random_state=self.random_state,
+                        )
+                        estimator.fit(matrix, y_numeric.astype(int))
+                else:
+                    estimator = RandomForestClassifier(
+                        n_estimators=200,
+                        max_depth=10,
+                        min_samples_leaf=2,
+                        class_weight="balanced_subsample",
+                        n_jobs=-1,
+                        random_state=self.random_state,
+                    )
+                    estimator.fit(matrix, y_numeric.astype(int))
                 self.estimator_ = estimator
 
             elif model_name == "xgboost":
@@ -397,16 +539,36 @@ class BaselineModel:
         if self.estimator_ == "constant" or self.estimator_ is None:
             return pd.Series(self.target_mean_, index=X.index, name=f"{self.name}_proba").clip(0.0, 1.0)
 
-        matrix = self._encode_features(X, fit=False)
+        model_frame = self._drop_identifier_columns(X)
+        matrix = self._encode_features(model_frame, fit=False)
         matrix = self._apply_feature_name_sanitization(matrix, fit=False)
         matrix = _to_float_matrix(matrix)
         try:
+            prediction_input: Any = matrix
+            if self._normalized_compute_backend() == "nvidia_cuda" and str(type(self.estimator_)).lower().find("xgboost") != -1:
+                try:
+                    import cupy as cp
+
+                    prediction_input = cp.asarray(matrix.to_numpy(dtype=np.float32, copy=False))
+                except Exception:
+                    prediction_input = matrix
             if hasattr(self.estimator_, "predict_proba"):
-                values = self.estimator_.predict_proba(matrix)
-                if isinstance(values, np.ndarray) and values.ndim == 2 and values.shape[1] > 1:
-                    proba = values[:, 1]
+                values = self.estimator_.predict_proba(prediction_input)
+                values_np = _as_numpy(values)
+                if values_np.ndim == 2 and values_np.shape[1] > 1:
+                    proba = values_np[:, 1]
                 else:
-                    proba = np.asarray(values).reshape(-1)
+                    proba = values_np.reshape(-1)
+            elif hasattr(self.estimator_, "predict"):
+                preds = self.estimator_.predict(prediction_input)
+                preds_np = _as_numpy(preds).reshape(-1)
+                model_name = self._normalize_name()
+                if model_name in {"poisson_regression", "negative_binomial_regression"}:
+                    proba = 1.0 - np.exp(-np.clip(preds_np, a_min=0.0, a_max=None))
+                elif model_name == "random_forest":
+                    proba = np.clip(preds_np, 0.0, 1.0)
+                else:
+                    proba = np.clip(preds_np, 0.0, 1.0)
             elif hasattr(self.estimator_, "model") and hasattr(self.estimator_.model, "exog_names"):
                 try:
                     import statsmodels.api as sm
@@ -417,13 +579,13 @@ class BaselineModel:
                     if exog_names:
                         design = design.reindex(columns=exog_names, fill_value=0.0)
                     preds = self.estimator_.predict(design)
-                    proba = np.asarray(preds).reshape(-1)
+                    proba = _as_numpy(preds).reshape(-1)
                 except Exception:
                     preds = self.estimator_.predict(matrix)
-                    proba = np.asarray(preds).reshape(-1)
+                    proba = _as_numpy(preds).reshape(-1)
             else:
                 preds = self.estimator_.predict(matrix)
-                proba = np.asarray(preds).reshape(-1)
+                proba = _as_numpy(preds).reshape(-1)
                 proba = 1.0 - np.exp(-np.clip(proba, a_min=0.0, a_max=None))
         except Exception as predict_error:
             LOGGER.warning(
