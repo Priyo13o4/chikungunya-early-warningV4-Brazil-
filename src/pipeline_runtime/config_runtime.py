@@ -22,6 +22,7 @@ _SUPPORTED_BAYESIAN_SAMPLING_BACKENDS: set[str] = {"auto", "pymc", "jax_numpyro"
 _SUPPORTED_BAYESIAN_PROFILE_MODES: set[str] = {"cv", "final", "dev"}
 _BAYESIAN_PROFILE_KEYS: tuple[str, ...] = (
     "chains",
+    "pymc_cores",
     "tune",
     "draws",
     "target_accept",
@@ -99,6 +100,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bayesian-draws", type=int, default=None, help="Override Bayesian posterior draws")
     parser.add_argument("--bayesian-tune", type=int, default=None, help="Override Bayesian warmup/tune steps")
     parser.add_argument("--bayesian-chains", type=int, default=None, help="Override Bayesian chain count")
+    parser.add_argument("--bayesian-pymc-cores", type=int, default=None, help="Override PyMC CPU core count for chain parallelism")
     parser.add_argument("--bayesian-target-accept", type=float, default=None, help="Override Bayesian NUTS target_accept")
     parser.add_argument("--bayesian-max-treedepth", type=int, default=None, help="Override Bayesian NUTS max_treedepth")
     parser.add_argument(
@@ -174,6 +176,7 @@ def build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[str
         draws=int(bayesian_settings.get("draws", BayesianModelConfig.draws)),
         tune=int(bayesian_settings.get("tune", BayesianModelConfig.tune)),
         chains=int(bayesian_settings.get("chains", BayesianModelConfig.chains)),
+        pymc_cores=max(1, int(bayesian_settings.get("pymc_cores", BayesianModelConfig.pymc_cores))),
         bayesian_progress=bool(bayesian_settings.get("bayesian_progress", BayesianModelConfig.bayesian_progress)),
         target_accept=float(bayesian_settings.get("target_accept", BayesianModelConfig.target_accept)),
         max_treedepth=int(bayesian_settings.get("max_treedepth", BayesianModelConfig.max_treedepth)),

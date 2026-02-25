@@ -42,6 +42,7 @@ class BayesianModelConfig:
     draws: int = 1200
     tune: int = 1500
     chains: int = 2
+    pymc_cores: int = 2
     bayesian_progress: bool = True
     target_accept: float = 0.95
     max_treedepth: int = 12
@@ -632,8 +633,9 @@ class HierarchicalBayesianModel:
             pm.NegativeBinomial("cases_obs", mu=mu, alpha=alpha_nb, observed=observed, dims="obs")
 
             LOGGER.info(
-                "Starting Bayesian sampling: chains=%d, draws=%d, tune=%d, target_accept=%.3f, max_treedepth=%d, simplified_mode=%s, progressbar=%s",
+                "Starting Bayesian sampling: chains=%d, cores=%d, draws=%d, tune=%d, target_accept=%.3f, max_treedepth=%d, simplified_mode=%s, progressbar=%s",
                 int(self.config.chains),
+                int(max(1, min(self.config.pymc_cores, self.config.chains))),
                 int(self.config.draws),
                 int(self.config.tune),
                 float(self.config.target_accept),
@@ -646,6 +648,7 @@ class HierarchicalBayesianModel:
                 draws=self.config.draws,
                 tune=self.config.tune,
                 chains=self.config.chains,
+                cores=max(1, min(self.config.pymc_cores, self.config.chains)),
                 target_accept=self.config.target_accept,
                 nuts={"max_treedepth": self.config.max_treedepth},
                 random_seed=self.config.random_seed,

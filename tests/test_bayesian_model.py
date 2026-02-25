@@ -82,12 +82,21 @@ def test_sampling_backend_config_normalization() -> None:
     assert cfg_invalid.sampling_backend == "auto"
 
 
+def test_bayesian_config_reads_pymc_cores() -> None:
+    cfg = config_runtime.build_bayesian_config(
+        strict_dependencies=False,
+        bayesian_settings={"pymc_cores": 3, "chains": 4},
+    )
+
+    assert int(cfg.pymc_cores) == 3
+
+
 def test_resolve_bayesian_profile_settings_default_routing() -> None:
     fullfit, oof, usage = config_runtime.resolve_bayesian_profile_settings(
         bayesian_settings={"draws": 800, "tune": 1200, "chains": 2, "target_accept": 0.99},
         bayesian_profiles={
-            "final": {"draws": 1000, "tune": 1500},
-            "cv": {"draws": 300, "tune": 500, "bayesian_progress": False},
+            "final": {"draws": 1000, "tune": 1500, "pymc_cores": 2},
+            "cv": {"draws": 300, "tune": 500, "bayesian_progress": False, "pymc_cores": 1},
         },
         profile_mode=None,
     )
@@ -98,6 +107,7 @@ def test_resolve_bayesian_profile_settings_default_routing() -> None:
     assert usage["oof_profile_name"] == "cv"
     assert usage["cv_profile_differs_from_final"] is True
     assert "draws" in usage["cv_vs_final_diff_keys"]
+    assert "pymc_cores" in usage["cv_vs_final_diff_keys"]
 
 
 def test_resolve_bayesian_profile_settings_dev_override_applies_to_both() -> None:
@@ -106,7 +116,7 @@ def test_resolve_bayesian_profile_settings_dev_override_applies_to_both() -> Non
         bayesian_profiles={
             "final": {"draws": 1000},
             "cv": {"draws": 400},
-            "dev": {"draws": 50, "chains": 1, "bayesian_progress": False},
+            "dev": {"draws": 50, "chains": 1, "pymc_cores": 1, "bayesian_progress": False},
         },
         profile_mode="dev",
     )
@@ -115,6 +125,8 @@ def test_resolve_bayesian_profile_settings_dev_override_applies_to_both() -> Non
     assert int(oof["draws"]) == 50
     assert int(fullfit["chains"]) == 1
     assert int(oof["chains"]) == 1
+    assert int(fullfit["pymc_cores"]) == 1
+    assert int(oof["pymc_cores"]) == 1
     assert usage["profile_mode_override"] == "dev"
     assert usage["fullfit_profile_name"] == "dev"
     assert usage["oof_profile_name"] == "dev"

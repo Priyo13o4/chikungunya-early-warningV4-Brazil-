@@ -1942,6 +1942,7 @@ def main() -> None:
             "draws": args.bayesian_draws,
             "tune": args.bayesian_tune,
             "chains": args.bayesian_chains,
+            "pymc_cores": args.bayesian_pymc_cores,
             "bayesian_progress": args.bayesian_progress,
             "target_accept": args.bayesian_target_accept,
             "max_treedepth": args.bayesian_max_treedepth,
