@@ -83,3 +83,8 @@ secrets/
 *.bak
 *.swp
 data.zip
+
+# Run-generated artifacts (safe to ignore)
+outputs/metrics/
+outputs/reports/*.json
+outputs/reports/*.log
