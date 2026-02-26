@@ -5,9 +5,6 @@
 # ============================================================
 # A) Setup
 # ============================================================
-cd "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4"
-source .venv310/bin/activate
-
 # ============================================================
 # B) Quick integrity checks
 # ============================================================

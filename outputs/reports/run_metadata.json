@@ -1,6 +1,6 @@
 {
-  "run_id": "20260226T125727Z-73e53229",
-  "started_at_utc": "2026-02-26T12:57:27.426398+00:00",
+  "run_id": "20260226T155618Z-67ac60ed",
+  "started_at_utc": "2026-02-26T15:56:18.319775+00:00",
   "effective_seed": 42,
   "model_config_path": "config/model_config.yaml",
   "adapter_config_path": null,
@@ -47,18 +47,18 @@
   },
   "bayesian_backend": {
     "requested_backend": "auto",
-    "resolved_backend": "macos_metal",
+    "resolved_backend": "nvidia_cuda",
     "actual_runtime_backend": "cpu",
-    "backend_implemented": true,
-    "fallback_reason": null,
+    "backend_implemented": false,
+    "fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
     "sampling_backend_requested": "auto",
     "sampling_backend_effective": "pymc",
-    "sampling_backend_fallback_reason": null,
+    "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
     "sampling_backend_requested_source": "bayesian_model"
   },
   "sampling_backend_requested": "auto",
   "sampling_backend_effective": "pymc",
-  "sampling_backend_fallback_reason": null,
+  "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
   "bayesian_profile_usage": {
     "profile_mode_override": null,
     "default_routing": "fullfit=final,oof=cv",
@@ -124,31 +124,30 @@
       "configured": true
     },
     "effective": {
-      "baseline_backend": "macos_metal",
-      "bayesian_backend": "macos_metal"
+      "baseline_backend": "nvidia_cuda",
+      "bayesian_backend": "nvidia_cuda"
     },
-    "baseline_backend": "macos_metal",
-    "bayesian_backend": "macos_metal",
+    "baseline_backend": "nvidia_cuda",
+    "bayesian_backend": "nvidia_cuda",
     "fallback": "cpu",
     "fallback_used": false,
     "reason_logs": [],
     "capabilities": {
-      "macos_metal": true,
-      "nvidia_cuda": false,
+      "macos_metal": false,
+      "nvidia_cuda": true,
       "details": {
-        "platform": "Darwin",
+        "platform": "Linux",
         "macos_metal": {
-          "platform": "Darwin",
-          "probes": [
-            {
-              "source": "xcrun -f metal",
-              "returncode": 0,
-              "stdout": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"
-            }
-          ]
+          "reason": "non_macos"
         },
         "nvidia_cuda": {
-          "probes": []
+          "probes": [
+            {
+              "source": "nvidia-smi -L",
+              "returncode": 0,
+              "stdout": "GPU 0: NVIDIA L4 (UUID: GPU-a1266934-6865-885f-4982-5144435ef096)"
+            }
+          ]
         }
       }
     },
@@ -157,7 +156,7 @@
         "track": "baseline",
         "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "macos_metal",
+        "effective_backend": "nvidia_cuda",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
@@ -166,7 +165,7 @@
         "track": "bayesian",
         "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "macos_metal",
+        "effective_backend": "nvidia_cuda",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
@@ -212,7 +211,7 @@
       "end_year": 2025,
       "selected_percentile": 75,
       "skip_baselines": false,
-      "skip_bayesian": true,
+      "skip_bayesian": false,
       "skip_visualizations": true,
       "decision_cost": 0.2,
       "decision_loss": 1.0,
@@ -233,8 +232,8 @@
       "log_level": "INFO",
       "seed": null
     },
-    "git_commit_sha": "767f731e187f407efe7297cf920aaf24a3516c2e",
-    "python_version": "3.10.19 (main, Oct  9 2025, 15:25:03) [Clang 17.0.0 (clang-1700.6.3.2)]",
+    "git_commit_sha": "a954b7a6dfbcd98fde95c809abe3333c6e665930",
+    "python_version": "3.10.17 | packaged by conda-forge | (main, Apr 10 2025, 22:19:12) [GCC 13.3.0]",
     "input_hashes_sha256": {
       "raw_data": "8cc194b5cd9ad65e497fbc04a66a6e29aa50ba45a13583d950817bc28be0bbda",
       "model_config": "422eb0f7b03e70071fb925d443f9420f1656c8b5420e4dfc238d0b39544f83ec",
@@ -242,37 +241,5 @@
       "cv_config": "d823a16af3792c192c8c7aaec2cd18ee5aaaca47935c5b84aeba073a1a3d0fa9",
       "curated_municipalities_contract": "a8140067558922bae3e96e3b5e56bce27d16ce0352dfdf1d35e58f11f45952be"
     }
-  },
-  "bayesian_covariates_effective": [
-    "month",
-    "year",
-    "weekofyear"
-  ],
-  "bayesian_covariates_requested": [
-    "month",
-    "year",
-    "weekofyear"
-  ],
-  "bayesian_covariate_selection": {
-    "requested_covariates": [
-      "month",
-      "year",
-      "weekofyear"
-    ],
-    "selected_covariates": [
-      "month",
-      "year",
-      "weekofyear"
-    ],
-    "excluded_covariates": [],
-    "missing_covariates": [],
-    "required_covariates": [
-      "month",
-      "year",
-      "weekofyear"
-    ],
-    "required_covariates_present": true,
-    "viable_count": 3,
-    "requested_count": 3
   }
 }
