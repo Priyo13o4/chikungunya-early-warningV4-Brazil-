@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "strict_mode": false,
+  "variance_threshold": 1e-10,
+  "uniqueness_threshold": 0.01,
+  "min_non_missing_samples": 24,
+  "mechanistic_features_checked": [],
+  "flagged_features": [],
+  "dropped_features": [],
+  "feature_details": {}
+}

@@ -1,0 +1,35 @@
+{
+  "run_id": "20260226T125727Z-73e53229",
+  "mode": "off",
+  "active": false,
+  "reproducibility": {
+    "district_hash": "md5_lower_utf8_hex8_mod"
+  },
+  "inputs": {
+    "labeled_rows": 172200,
+    "feature_rows": 172200,
+    "labeled_districts": 299
+  },
+  "filters": {
+    "year_window": {
+      "requested": null,
+      "applied": false
+    },
+    "district_shard": {
+      "requested_count": null,
+      "requested_index": null,
+      "applied": false
+    }
+  },
+  "warnings": [],
+  "outputs": {
+    "labeled_rows": 172200,
+    "feature_rows": 172200,
+    "labeled_districts": 299
+  },
+  "bayesian_subset": {
+    "enabled": false,
+    "max_rows": 0,
+    "strategy": "recent_years"
+  }
+}

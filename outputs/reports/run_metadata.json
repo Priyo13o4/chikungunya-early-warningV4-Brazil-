@@ -1,0 +1,278 @@
+{
+  "run_id": "20260226T125727Z-73e53229",
+  "started_at_utc": "2026-02-26T12:57:27.426398+00:00",
+  "effective_seed": 42,
+  "model_config_path": "config/model_config.yaml",
+  "adapter_config_path": null,
+  "cv_config_path": "config/cv_config.yaml",
+  "effective_cv_config": {
+    "strategy": "time_series_split",
+    "n_splits": 5,
+    "gap": 0,
+    "test_size": 12,
+    "date_column": "date",
+    "target_column": "outbreak_label",
+    "first_valid_year": 2016,
+    "last_valid_year": 2020,
+    "start_train_year": 2015,
+    "thesis_strict": true,
+    "train_window_years": 5,
+    "skip_single_class_folds": true,
+    "minimum_evaluated_folds": 3,
+    "min_outbreak_count_per_fold": 1,
+    "min_class_ratio_per_fold": 0.0,
+    "max_class_ratio_per_fold": 1.0,
+    "min_municipality_count_per_fold": 1,
+    "min_train_span_years": 1,
+    "fail_on_gate_violation": true
+  },
+  "adapter": {
+    "enabled": false,
+    "callables": {
+      "load_data": "default",
+      "label_outbreaks": "default",
+      "build_feature_matrix": "default",
+      "build_fold_ledger": "default",
+      "generate_time_splits": "default"
+    },
+    "brazil_adapter_active": false
+  },
+  "bayesian_mode_control": {
+    "force_full_requested": false,
+    "force_full_effective": false,
+    "brazil_adapter_active": false,
+    "bayesian_simplified_mode": false,
+    "max_convergence_retries": 1,
+    "convergence_failure_mode": "warn"
+  },
+  "bayesian_backend": {
+    "requested_backend": "auto",
+    "resolved_backend": "macos_metal",
+    "actual_runtime_backend": "cpu",
+    "backend_implemented": true,
+    "fallback_reason": null,
+    "sampling_backend_requested": "auto",
+    "sampling_backend_effective": "pymc",
+    "sampling_backend_fallback_reason": null,
+    "sampling_backend_requested_source": "bayesian_model"
+  },
+  "sampling_backend_requested": "auto",
+  "sampling_backend_effective": "pymc",
+  "sampling_backend_fallback_reason": null,
+  "bayesian_profile_usage": {
+    "profile_mode_override": null,
+    "default_routing": "fullfit=final,oof=cv",
+    "fullfit_profile_name": "final",
+    "oof_profile_name": "cv",
+    "declared_profiles": {
+      "cv": {
+        "chains": 2,
+        "tune": 500,
+        "draws": 500,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
+        "bayesian_progress": false
+      },
+      "final": {
+        "chains": 2,
+        "tune": 500,
+        "draws": 500,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
+        "bayesian_progress": true
+      },
+      "dev": {
+        "chains": 1,
+        "tune": 100,
+        "draws": 80,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
+        "bayesian_progress": false
+      }
+    },
+    "effective_profile_values": {
+      "fullfit": {
+        "chains": 2,
+        "tune": 500,
+        "draws": 500,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
+        "bayesian_progress": true
+      },
+      "oof": {
+        "chains": 2,
+        "tune": 500,
+        "draws": 500,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
+        "bayesian_progress": false
+      }
+    },
+    "cv_profile_differs_from_final": true,
+    "cv_vs_final_diff_keys": [
+      "bayesian_progress"
+    ],
+    "warning_flags": [],
+    "cv_subset_mode_active": false
+  },
+  "compute_backend": {
+    "configured": true,
+    "requested": {
+      "mode": "auto",
+      "prefer_gpu_for": "both",
+      "fallback": "cpu",
+      "configured": true
+    },
+    "effective": {
+      "baseline_backend": "macos_metal",
+      "bayesian_backend": "macos_metal"
+    },
+    "baseline_backend": "macos_metal",
+    "bayesian_backend": "macos_metal",
+    "fallback": "cpu",
+    "fallback_used": false,
+    "reason_logs": [],
+    "capabilities": {
+      "macos_metal": true,
+      "nvidia_cuda": false,
+      "details": {
+        "platform": "Darwin",
+        "macos_metal": {
+          "platform": "Darwin",
+          "probes": [
+            {
+              "source": "xcrun -f metal",
+              "returncode": 0,
+              "stdout": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"
+            }
+          ]
+        },
+        "nvidia_cuda": {
+          "probes": []
+        }
+      }
+    },
+    "tracks": {
+      "baseline": {
+        "track": "baseline",
+        "requested_mode": "auto",
+        "gpu_preferred_for_track": true,
+        "effective_backend": "macos_metal",
+        "fallback_backend": "cpu",
+        "fallback_used": false,
+        "reason_logs": []
+      },
+      "bayesian": {
+        "track": "bayesian",
+        "requested_mode": "auto",
+        "gpu_preferred_for_track": true,
+        "effective_backend": "macos_metal",
+        "fallback_backend": "cpu",
+        "fallback_used": false,
+        "reason_logs": []
+      }
+    }
+  },
+  "memory_optimization": {
+    "mode": "off",
+    "train_year_window": null,
+    "district_shard_count": null,
+    "district_shard_index": null,
+    "bayesian_subset": {
+      "enabled": false,
+      "max_rows": 0,
+      "strategy": "recent_years"
+    },
+    "active": false,
+    "rows_before": 172200,
+    "rows_after": 172200
+  },
+  "curated_municipalities": {
+    "path": "resources/curated_municipalities_v1.json",
+    "version": "v1",
+    "source": "outputs/reports/audit_suite/municipality_candidates_balanced_top300.csv",
+    "count": 300,
+    "sha256": "a8140067558922bae3e96e3b5e56bce27d16ce0352dfdf1d35e58f11f45952be",
+    "filter_report": {
+      "municipality_column": "municipality_id",
+      "rows_before": 3197180,
+      "rows_after": 172200,
+      "districts_before": 5298,
+      "districts_after": 299
+    }
+  },
+  "reproducibility": {
+    "effective_cli_args": {
+      "model_config": "config/model_config.yaml",
+      "adapter_config": null,
+      "cv_config": "config/cv_config.yaml",
+      "raw_data": "data/raw/Epiclim_Final_data.csv",
+      "population_data": null,
+      "start_year": 2015,
+      "end_year": 2025,
+      "selected_percentile": 75,
+      "skip_baselines": false,
+      "skip_bayesian": true,
+      "skip_visualizations": true,
+      "decision_cost": 0.2,
+      "decision_loss": 1.0,
+      "lead_time_max_lookback_steps": 8,
+      "strict_bayesian_deps": false,
+      "strict_feature_gate": false,
+      "bayesian_draws": null,
+      "bayesian_tune": null,
+      "bayesian_chains": null,
+      "bayesian_target_accept": null,
+      "bayesian_max_treedepth": null,
+      "bayesian_profile_mode": null,
+      "bayesian_progress": null,
+      "bayesian_simplified_mode": false,
+      "force_full_bayesian": false,
+      "export_detailed_csv": false,
+      "model_names": null,
+      "log_level": "INFO",
+      "seed": null
+    },
+    "git_commit_sha": "767f731e187f407efe7297cf920aaf24a3516c2e",
+    "python_version": "3.10.19 (main, Oct  9 2025, 15:25:03) [Clang 17.0.0 (clang-1700.6.3.2)]",
+    "input_hashes_sha256": {
+      "raw_data": "8cc194b5cd9ad65e497fbc04a66a6e29aa50ba45a13583d950817bc28be0bbda",
+      "model_config": "422eb0f7b03e70071fb925d443f9420f1656c8b5420e4dfc238d0b39544f83ec",
+      "adapter_config": null,
+      "cv_config": "d823a16af3792c192c8c7aaec2cd18ee5aaaca47935c5b84aeba073a1a3d0fa9",
+      "curated_municipalities_contract": "a8140067558922bae3e96e3b5e56bce27d16ce0352dfdf1d35e58f11f45952be"
+    }
+  },
+  "bayesian_covariates_effective": [
+    "month",
+    "year",
+    "weekofyear"
+  ],
+  "bayesian_covariates_requested": [
+    "month",
+    "year",
+    "weekofyear"
+  ],
+  "bayesian_covariate_selection": {
+    "requested_covariates": [
+      "month",
+      "year",
+      "weekofyear"
+    ],
+    "selected_covariates": [
+      "month",
+      "year",
+      "weekofyear"
+    ],
+    "excluded_covariates": [],
+    "missing_covariates": [],
+    "required_covariates": [
+      "month",
+      "year",
+      "weekofyear"
+    ],
+    "required_covariates_present": true,
+    "viable_count": 3,
+    "requested_count": 3
+  }
+}
