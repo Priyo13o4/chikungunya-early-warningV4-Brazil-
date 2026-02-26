@@ -3,11 +3,68 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
+import pytest
+import run_pipeline as run_pipeline_module
 
-from run_pipeline import _apply_memory_optimization_filters, _build_model_input_df, run
+from run_pipeline import _apply_memory_optimization_filters, _load_curated_municipality_contract, run
+from src.models.baselines.cv_splitter import TimeSeriesCVConfig
+from src.models.baselines.train_baselines import BaselineTrainingConfig
+from src.pipeline_runtime.phase_context import SharedPhaseState
+from src.pipeline_runtime.phases_baseline import build_model_input_df, run_baseline_phase
 from src.pipeline_runtime import config_runtime
+
+
+@pytest.fixture(autouse=True)
+def _use_test_curated_contract(tmp_path, monkeypatch):
+    contract_path = tmp_path / "curated_municipalities_test.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "version": "v1-smoke-tests",
+                "source": "tests/test_pipeline_smoke.py",
+                "selection": "synthetic_district_labels",
+                "municipality_ids": ["A", "B", "C", "D"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_pipeline_module, "_DEFAULT_CURATED_MUNICIPALITIES_PATH", contract_path)
+
+    cv_config_path = tmp_path / "cv_config_smoke.yaml"
+    cv_config_path.write_text(
+        "\n".join(
+            [
+                "strategy: time_series_split",
+                "n_splits: 5",
+                "gap: 0",
+                "test_size: 12",
+                "date_column: date",
+                "target_column: outbreak_label",
+                "first_valid_year: 2016",
+                "last_valid_year: 2020",
+                "start_train_year: 2015",
+                "thesis_strict: false",
+                "train_window_years: 5",
+                "skip_single_class_folds: true",
+                "minimum_evaluated_folds: 1",
+                "fail_on_gate_violation: false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    original_run = run_pipeline_module.run
+
+    def run_with_relaxed_feature_gate(*, strict_feature_gate=False, **kwargs):
+        kwargs.setdefault("cv_config_path", cv_config_path)
+        return original_run(strict_feature_gate=bool(strict_feature_gate), **kwargs)
+
+    monkeypatch.setattr(run_pipeline_module, "run", run_with_relaxed_feature_gate)
+    monkeypatch.setitem(globals(), "run", run_with_relaxed_feature_gate)
 
 
 def test_pipeline_smoke_with_synthetic_dataframe(tmp_path) -> None:
@@ -54,7 +111,7 @@ def test_model_input_forbidden_columns_are_dropped() -> None:
         }
     )
 
-    sanitized, audit = _build_model_input_df(frame)
+    sanitized, audit = build_model_input_df(frame)
     assert "outbreak_label" not in sanitized.columns
     assert "outbreak_label_p75" not in sanitized.columns
     assert "threshold_p75" not in sanitized.columns
@@ -62,6 +119,132 @@ def test_model_input_forbidden_columns_are_dropped() -> None:
     assert "case_lag_1" in sanitized.columns
     assert "rainfall" in sanitized.columns
     assert set(audit["dropped_forbidden_columns"]) >= {"outbreak_label", "outbreak_label_p75", "threshold_p75", "cases"}
+
+
+def test_baseline_phase_propagates_custom_splitter_to_train_baselines(tmp_path) -> None:
+    reports_dir = tmp_path / "reports"
+    models_dir = tmp_path / "models"
+    metrics_dir = tmp_path / "metrics"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    paths = SimpleNamespace(
+        outputs_reports=reports_dir,
+        outputs_models=models_dir,
+        outputs_metrics=metrics_dir,
+    )
+
+    labeled_df = pd.DataFrame(
+        {
+            "date": ["2016-01-01", "2017-01-01", "2018-01-01"],
+            "district": ["A", "A", "A"],
+            "cases": [1.0, 2.0, 3.0],
+            "outbreak_label": [0, 1, 0],
+            "threshold_p75": [1.0, 1.0, 1.0],
+        }
+    )
+    features_df = pd.DataFrame(
+        {
+            "temp_anomaly": [0.1, 0.2, 0.3],
+            "rainfall_4wk": [10.0, 11.0, 12.0],
+        },
+        index=labeled_df.index,
+    )
+
+    splitter_observed = {"used": False}
+    train_seen = {"received_callable": False}
+
+    def custom_generate_time_splits(df: pd.DataFrame, cv_cfg: TimeSeriesCVConfig):
+        df
+        cv_cfg
+        splitter_observed["used"] = True
+        yield np.array([0, 1]), np.array([2])
+
+    def fake_train_baselines(
+        X: pd.DataFrame,
+        y: pd.Series,
+        *,
+        config,
+        cv_config,
+        model_names,
+        build_fold_ledger_fn,
+        generate_time_splits_fn,
+    ):
+        X
+        y
+        config
+        model_names
+        build_fold_ledger_fn
+        split_fn = generate_time_splits_fn
+        assert callable(split_fn)
+        train_seen["received_callable"] = bool(split_fn is custom_generate_time_splits)
+        training_frame = X.copy()
+        training_frame["outbreak_label"] = pd.to_numeric(y, errors="coerce").fillna(0).astype(int)
+        list(split_fn(training_frame, cv_config))
+        return {}
+
+    def fake_predict_baselines(models, X):
+        models
+        return pd.DataFrame(index=X.index)
+
+    def fake_evaluate_baseline_predictions(*args, **kwargs):
+        args
+        kwargs
+        return {"accuracy": 0.0}
+
+    def fake_collect_oof_scores(*, output_root, expected_index):
+        output_root
+        return pd.Series(np.nan, index=expected_index, dtype="float64")
+
+    def fake_collect_oof_predictions(*, output_root, expected_index):
+        output_root
+        return pd.DataFrame(index=expected_index)
+
+    def fake_collect_oof_fold_ids(output_root):
+        output_root
+        return []
+
+    def safe_write_json(payload: dict, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    run_baseline_phase(
+        state=SharedPhaseState(run_id="test-run"),
+        paths=paths,
+        labeled_df=labeled_df,
+        features_df=features_df,
+        selected_percentile=75,
+        effective_cv_config=TimeSeriesCVConfig(
+            date_column="date",
+            target_column="outbreak_label",
+            start_train_year=2016,
+            first_valid_year=2017,
+            last_valid_year=2018,
+            skip_single_class_folds=False,
+        ),
+        effective_seed=42,
+        strict_feature_gate=True,
+        baseline_compute_backend="cpu",
+        skip_baselines=False,
+        export_detailed_csv=False,
+        model_names=["logistic_regression"],
+        lead_time_max_lookback_steps=8,
+        threshold_scope_audit={"checked": False},
+        cv_ledger_callable=lambda df, cv_cfg: [{"status": "yielded", "valid_year": 2018}],
+        cv_split_callable=custom_generate_time_splits,
+        train_baselines_fn=fake_train_baselines,
+        baseline_training_config_cls=BaselineTrainingConfig,
+        predict_baselines_fn=fake_predict_baselines,
+        evaluate_baseline_predictions_fn=fake_evaluate_baseline_predictions,
+        collect_baseline_oof_scores_fn=fake_collect_oof_scores,
+        collect_baseline_oof_predictions_fn=fake_collect_oof_predictions,
+        collect_baseline_oof_fold_ids_fn=fake_collect_oof_fold_ids,
+        safe_write_json_fn=safe_write_json,
+    )
+
+    assert train_seen["received_callable"] is True
+    assert splitter_observed["used"] is True
 
 
 def test_memory_optimization_default_noop_behavior() -> None:
@@ -84,6 +267,44 @@ def test_memory_optimization_default_noop_behavior() -> None:
     assert report["active"] is False
     assert len(filtered_labeled) == len(labeled)
     assert len(filtered_features) == len(features)
+
+
+def test_curated_contract_selection_optional_but_unknown_keys_rejected(tmp_path) -> None:
+    contract_path = tmp_path / "curated_ok.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "source": "tests",
+                "selection": "balanced_top300_snapshot",
+                "municipality_ids": ["3304557", "3304557", " 2927408 "],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = _load_curated_municipality_contract(contract_path)
+    assert loaded["version"] == "v1"
+    assert loaded["source"] == "tests"
+    assert loaded["selection"] == "balanced_top300_snapshot"
+    assert loaded["count"] == 2
+    assert loaded["municipality_ids"] == ["2927408", "3304557"]
+
+    bad_contract_path = tmp_path / "curated_bad.json"
+    bad_contract_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "source": "tests",
+                "municipality_ids": ["3304557"],
+                "unexpected": "should-fail",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unknown keys"):
+        _load_curated_municipality_contract(bad_contract_path)
 
 
 def test_memory_optimization_year_window_filtering() -> None:
@@ -616,6 +837,7 @@ def test_manifest_contract_artifacts_and_run_id_parity(tmp_path) -> None:
     metadata = json.loads(artifacts["run_metadata"].read_text(encoding="utf-8"))
     degraded = json.loads(artifacts["degraded_run"].read_text(encoding="utf-8"))
     fold_ledger = json.loads(artifacts["fold_ledger"].read_text(encoding="utf-8"))
+    risk_meta = json.loads(artifacts["bayesian_risk_metadata"].read_text(encoding="utf-8"))
 
     required = set(manifest["contract_required_artifacts"])
     assert required.issubset(set(manifest["artifacts"].keys()))
@@ -627,6 +849,75 @@ def test_manifest_contract_artifacts_and_run_id_parity(tmp_path) -> None:
     assert metadata["run_id"] == run_id
     assert degraded["run_id"] == run_id
     assert fold_ledger["run_id"] == run_id
+    assert risk_meta.get("climate_covariates") == ["month", "year", "weekofyear"]
+    assert metadata.get("bayesian_covariates_effective") == ["month", "year", "weekofyear"]
+    assert metadata.get("bayesian_covariates_requested") == ["month", "year", "weekofyear"]
+    assert manifest.get("bayesian_covariates", {}).get("effective") == ["month", "year", "weekofyear"]
+    assert manifest.get("bayesian_covariates", {}).get("requested") == ["month", "year", "weekofyear"]
+    assert fold_ledger.get("bayesian_covariates_effective") == ["month", "year", "weekofyear"]
+    assert fold_ledger.get("bayesian_covariates_requested") == ["month", "year", "weekofyear"]
+    assert degraded.get("bayesian_covariates_effective") == ["month", "year", "weekofyear"]
+    assert degraded.get("bayesian_covariates_requested") == ["month", "year", "weekofyear"]
+
+
+def test_bayesian_track_suppressed_when_no_viable_covariates_remain(tmp_path, monkeypatch) -> None:
+    synthetic = pd.DataFrame(
+        {
+            "date": pd.date_range("2016-01-01", periods=8, freq="W").astype(str),
+            "district": ["A", "A", "A", "A", "B", "B", "B", "B"],
+            "state": ["S"] * 8,
+            "cases": [1, 3, 7, 2, 4, 6, 8, 1],
+            "rainfall": [5.0, 2.0, 7.0, 9.0, 1.0, 0.0, 3.0, 2.0],
+            "temperature": [28.0, 29.0, 30.0, 31.0, 27.0, 26.0, 25.0, 24.0],
+            "humidity": [60.0, 62.0, 58.0, 57.0, 64.0, 66.0, 68.0, 65.0],
+        }
+    )
+    raw_path = tmp_path / "synthetic_no_viable_covariates.csv"
+    synthetic.to_csv(raw_path, index=False)
+
+    def _should_not_run_bayesian_track(*args, **kwargs):
+        args
+        kwargs
+        raise AssertionError("Bayesian model execution should be skipped when no viable covariates remain")
+
+    monkeypatch.setattr("run_pipeline._run_bayesian_track", _should_not_run_bayesian_track)
+
+    artifacts = run(
+        raw_data_path=raw_path,
+        start_year=2016,
+        end_year=2016,
+        skip_baselines=True,
+        skip_visualizations=True,
+        bayesian_overrides={"climate_covariates": ["missing_covariate_a", "missing_covariate_b"]},
+    )
+
+    bayes_metrics = json.loads(artifacts["bayesian_metrics"].read_text(encoding="utf-8"))
+    bayes_fullfit_metrics = json.loads(artifacts["bayesian_metrics_fullfit"].read_text(encoding="utf-8"))
+    risk_meta = json.loads(artifacts["bayesian_risk_metadata"].read_text(encoding="utf-8"))
+    run_meta = json.loads(artifacts["run_metadata"].read_text(encoding="utf-8"))
+    degraded = json.loads(artifacts["degraded_run"].read_text(encoding="utf-8"))
+    manifest = json.loads(artifacts["run_manifest"].read_text(encoding="utf-8"))
+
+    assert bayes_metrics.get("suppressed") is True
+    assert bayes_metrics.get("reason") == "bayesian_no_viable_covariates"
+    assert bayes_fullfit_metrics.get("suppressed") is True
+    assert bayes_fullfit_metrics.get("reason") == "bayesian_no_viable_covariates"
+    assert risk_meta.get("mode_used") == "suppressed_no_viable_covariates"
+    assert risk_meta.get("degraded_mode") is True
+    assert risk_meta.get("climate_covariates") == []
+    assert risk_meta.get("climate_covariates_requested") == ["missing_covariate_a", "missing_covariate_b"]
+    assert run_meta.get("bayesian_covariates_effective") == []
+    assert run_meta.get("bayesian_covariates_requested") == ["missing_covariate_a", "missing_covariate_b"]
+    assert run_meta.get("bayesian_covariate_selection", {}).get("viable_count") == 0
+    assert manifest.get("bayesian_covariates", {}).get("effective") == []
+    assert manifest.get("bayesian_covariates", {}).get("requested") == ["missing_covariate_a", "missing_covariate_b"]
+    assert manifest.get("bayesian_covariates", {}).get("selection", {}).get("viable_count") == 0
+    fold_ledger = json.loads(artifacts["fold_ledger"].read_text(encoding="utf-8"))
+    assert fold_ledger.get("bayesian_covariates_effective") == []
+    assert fold_ledger.get("bayesian_covariates_requested") == ["missing_covariate_a", "missing_covariate_b"]
+    assert degraded.get("bayesian_covariates_effective") == []
+    assert degraded.get("bayesian_covariates_requested") == ["missing_covariate_a", "missing_covariate_b"]
+    assert any(reason.get("code") == "bayesian_no_viable_covariates" for reason in degraded.get("reasons", []))
 
 
 def test_stale_headline_contract_files_removed_and_regenerated_on_rerun(tmp_path) -> None:

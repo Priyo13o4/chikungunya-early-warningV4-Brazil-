@@ -51,8 +51,39 @@ def run_evaluation_and_decision_phase(
     export_track_comparison_fn: Callable[..., dict[str, Path]],
     build_comparison_table_fn: Callable[..., pd.DataFrame],
     safe_write_json_fn: Callable[[dict[str, Any], Path], None],
+    bayesian_covariates_requested: list[str] | None = None,
+    bayesian_covariates_effective: list[str] | None = None,
+    bayesian_covariate_selection: dict[str, Any] | None = None,
 ) -> EvalDecisionPhaseResult:
     suppress_headline_comparison = bool(state.degraded_reasons)
+    covariates_requested_for_payload = list(
+        bayesian_covariates_requested
+        if bayesian_covariates_requested is not None
+        else (
+            bayesian_sampling_diagnostics.get("climate_covariates_requested")
+            or bayesian_sampling_diagnostics.get("climate_covariates")
+            or []
+        )
+    )
+    covariates_effective_for_payload = list(
+        bayesian_covariates_effective
+        if bayesian_covariates_effective is not None
+        else (bayesian_sampling_diagnostics.get("climate_covariates") or [])
+    )
+    covariate_selection_for_payload = bayesian_covariate_selection
+    if not isinstance(covariate_selection_for_payload, dict):
+        covariate_selection_for_payload = bayesian_sampling_diagnostics.get("covariate_selection")
+    if not isinstance(covariate_selection_for_payload, dict):
+        covariate_selection_for_payload = {
+            "requested_covariates": list(covariates_requested_for_payload),
+            "selected_covariates": list(covariates_effective_for_payload),
+            "excluded_covariates": [],
+            "missing_covariates": [],
+            "required_covariates": ["month", "year", "weekofyear"],
+            "required_covariates_present": True,
+            "viable_count": int(len(covariates_effective_for_payload)),
+            "requested_count": int(len(covariates_requested_for_payload)),
+        }
     degraded_run_payload = {
         "run_id": run_id,
         "degraded": bool(state.degraded_reasons),
@@ -60,6 +91,9 @@ def run_evaluation_and_decision_phase(
         "reasons": state.degraded_reasons,
         "baseline_headline_eligible": bool(baseline_headline_eligible),
         "bayesian_headline_eligible": bool(bayesian_headline_eligible),
+        "bayesian_covariates_requested": list(covariates_requested_for_payload),
+        "bayesian_covariates_effective": list(covariates_effective_for_payload),
+        "bayesian_covariate_selection": covariate_selection_for_payload,
     }
     degraded_run_path = paths.outputs_reports / "degraded_run.json"
     safe_write_json_fn(degraded_run_payload, degraded_run_path)
@@ -213,6 +247,24 @@ def run_evaluation_and_decision_phase(
     bayesian_headline_effective = bool(bayesian_headline_eligible) and not bool(state.degraded_reasons)
     if bayesian_converged is False:
         bayesian_headline_effective = False
+    covariates_requested = list(
+        bayesian_sampling_diagnostics.get("climate_covariates_requested")
+        or bayesian_sampling_diagnostics.get("climate_covariates")
+        or []
+    )
+    covariates_effective = list(bayesian_sampling_diagnostics.get("climate_covariates") or [])
+    covariate_selection_payload = bayesian_sampling_diagnostics.get("covariate_selection")
+    if not isinstance(covariate_selection_payload, dict):
+        covariate_selection_payload = {
+            "requested_covariates": list(covariates_requested),
+            "selected_covariates": list(covariates_effective),
+            "excluded_covariates": [],
+            "missing_covariates": [],
+            "required_covariates": ["month", "year", "weekofyear"],
+            "required_covariates_present": True,
+            "viable_count": int(len(covariates_effective)),
+            "requested_count": int(len(covariates_requested)),
+        }
     bayesian_risk_metadata_path = paths.outputs_metrics / "bayesian_risk_metadata.json"
     safe_write_json_fn(
         {
@@ -245,6 +297,11 @@ def run_evaluation_and_decision_phase(
             "sampling_backend_fallback_reason": bayesian_sampling_diagnostics.get(
                 "sampling_backend_fallback_reason"
             ),
+            "climate_covariates_requested": list(covariates_requested),
+            "climate_covariates": list(covariates_effective),
+            "covariates_requested": list(covariates_requested),
+            "covariates_effective": list(covariates_effective),
+            "covariate_selection": covariate_selection_payload,
             "compute_backend_requested": str(bayesian_sampling_diagnostics.get("compute_backend_requested", "cpu")),
             "compute_backend_effective": str(bayesian_sampling_diagnostics.get("compute_backend_effective", "cpu")),
             "compute_backend_runtime": str(bayesian_sampling_diagnostics.get("compute_backend_runtime", "cpu")),

@@ -219,3 +219,23 @@ def validate_manifest_contract(
             "degraded_run parity mismatch "
             f"(manifest_suppressed={suppressed_manifest}, degraded_suppressed={suppressed_degraded})"
         )
+
+    manifest_curated = manifest.get("curated_municipalities")
+    metadata_curated = metadata.get("curated_municipalities")
+    if not isinstance(manifest_curated, dict) or not isinstance(metadata_curated, dict):
+        raise RuntimeError(
+            "curated_municipalities block must exist as object in both run_manifest and run_metadata "
+            f"(manifest_type={type(manifest_curated).__name__}, run_metadata_type={type(metadata_curated).__name__})"
+        )
+
+    parity_fields = ("path", "version", "sha256")
+    mismatched_fields = [
+        field
+        for field in parity_fields
+        if str(manifest_curated.get(field)) != str(metadata_curated.get(field))
+    ]
+    if mismatched_fields:
+        raise RuntimeError(
+            "curated_municipalities parity mismatch "
+            f"(fields={mismatched_fields}, manifest={manifest_curated}, run_metadata={metadata_curated})"
+        )

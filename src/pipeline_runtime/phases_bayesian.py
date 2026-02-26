@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import inspect
 import logging
 from pathlib import Path
@@ -9,11 +10,22 @@ import numpy as np
 import pandas as pd
 
 from src.models.baselines.cv_splitter import TimeSeriesCVConfig, generate_time_splits
-from src.pipeline_runtime.config_runtime import build_bayesian_config
+from src.pipeline_runtime.config_runtime import (
+    build_bayesian_config,
+    resolve_bayesian_climate_covariates,
+    select_bayesian_covariates_by_availability,
+)
 from src.pipeline_runtime.io_artifacts import build_suppressed_metric_payload
 from src.pipeline_runtime.phase_context import BayesianPhaseResult, SharedPhaseState
 
 LOGGER = logging.getLogger(__name__)
+
+_BAYESIAN_OOF_HARD_FAIL_MARKERS: tuple[str, ...] = (
+    "cv statistical gate failure",
+    "statistical_gate_failed",
+    "missing required climate covariates",
+    "pipeline must provide the configured bayesian covariate set explicitly",
+)
 
 
 def _build_bayesian_backend_metadata(*, requested_backend: str, resolved_backend: str) -> dict[str, Any]:
@@ -166,10 +178,14 @@ def run_bayesian_track(
     if backend_metadata["fallback_reason"]:
         LOGGER.warning("%s", backend_metadata["fallback_reason"])
 
+    configured_covariates: list[str] = list(
+        resolve_bayesian_climate_covariates(bayesian_settings=bayesian_settings)
+    )
     try:
         from src.models.bayesian.hierarchical_model import BayesianModelConfig, HierarchicalBayesianModel
 
         config = build_bayesian_config(strict_dependencies, bayesian_settings)
+        configured_covariates = list(config.climate_covariates)
 
         if config.force_full_bayesian:
             config = BayesianModelConfig(
@@ -201,6 +217,7 @@ def run_bayesian_track(
         fallback_used = bool(float(bayesian_model.diagnostics_summary_.get("fallback", 0.0)) > 0.0)
         mode_used = "fallback" if fallback_used else ("simplified" if bayesian_model.simplified_used_ else "full_latent_ar")
         diagnostics = {
+            "climate_covariates": configured_covariates,
             "simplified_mode": bool(bayesian_model.simplified_used_),
             "force_full_bayesian": bool(config.force_full_bayesian),
             "mode_used": mode_used,
@@ -232,6 +249,7 @@ def run_bayesian_track(
             raise
         fallback_reason = f"missing optional dependencies ({import_error})"
         return None, None, {
+            "climate_covariates": configured_covariates,
             "degraded_mode": True,
             "fallback_used": True,
             "mode_used": "missing_dependencies",
@@ -271,35 +289,72 @@ def collect_bayesian_oof_scores(
 
     oof = pd.Series(np.nan, index=features_df.index, dtype="float64")
 
-    cv_frame = features_df.copy()
-    cv_frame[target_column] = pd.to_numeric(outbreak_target, errors="coerce").fillna(0).astype(int)
-    cv_config = TimeSeriesCVConfig(
-        date_column=cv_config.date_column or date_column,
-        target_column=cv_config.target_column or target_column,
-        start_train_year=cv_config.start_train_year,
-        first_valid_year=cv_config.first_valid_year,
-        last_valid_year=cv_config.last_valid_year,
-        train_window_years=cv_config.train_window_years,
-        thesis_strict=getattr(cv_config, "thesis_strict", False),
-        skip_single_class_folds=cv_config.skip_single_class_folds,
-        minimum_evaluated_folds=cv_config.minimum_evaluated_folds,
-    )
+    cv_effective = cv_config
+    if not str(cv_effective.date_column).strip() or not str(cv_effective.target_column).strip():
+        cv_payload = asdict(cv_effective)
+        if not str(cv_payload.get("date_column", "")).strip():
+            cv_payload["date_column"] = date_column
+        if not str(cv_payload.get("target_column", "")).strip():
+            cv_payload["target_column"] = target_column
+        cv_effective = TimeSeriesCVConfig(**cv_payload)
 
-    for train_idx, valid_idx in generate_time_splits_fn(cv_frame, cv_config):
+    cv_frame = features_df.copy()
+    cv_frame[cv_effective.target_column] = pd.to_numeric(outbreak_target, errors="coerce").fillna(0).astype(int)
+    requested_covariates = list(resolve_bayesian_climate_covariates(bayesian_settings=bayesian_settings))
+
+    for train_idx, valid_idx in generate_time_splits_fn(cv_frame, cv_effective):
         y_train_binary = pd.to_numeric(outbreak_target.loc[train_idx], errors="coerce").fillna(0).astype(int)
         y_train_counts = pd.to_numeric(count_target.loc[train_idx], errors="coerce").fillna(0.0)
         if y_train_binary.nunique(dropna=True) <= 1:
             continue
         try:
-            model = HierarchicalBayesianModel(config=build_bayesian_config(strict_dependencies, bayesian_settings))
-            model.fit(features_df.loc[train_idx], y_train_counts)
+            fold_train_features = features_df.loc[train_idx]
+            fold_valid_features = features_df.loc[valid_idx]
+
+            train_selection = select_bayesian_covariates_by_availability(
+                frame=fold_train_features,
+                requested_covariates=requested_covariates,
+            )
+            train_selected_covariates = list(train_selection.get("selected_covariates", []))
+            if not train_selected_covariates:
+                LOGGER.warning(
+                    "Bayesian OOF fold skipped: no viable covariates in train split after availability alignment. requested=%s excluded=%s",
+                    train_selection.get("requested_covariates", requested_covariates),
+                    train_selection.get("excluded_covariates", []),
+                )
+                continue
+
+            valid_selection = select_bayesian_covariates_by_availability(
+                frame=fold_valid_features,
+                requested_covariates=train_selected_covariates,
+            )
+            fold_selected_covariates = list(valid_selection.get("selected_covariates", []))
+            if not fold_selected_covariates:
+                LOGGER.warning(
+                    "Bayesian OOF fold skipped: no viable covariates in validation split after availability alignment. train_selected=%s excluded=%s",
+                    train_selected_covariates,
+                    valid_selection.get("excluded_covariates", []),
+                )
+                continue
+
+            fold_settings = dict(bayesian_settings)
+            fold_settings["climate_covariates"] = fold_selected_covariates
+
+            model = HierarchicalBayesianModel(config=build_bayesian_config(strict_dependencies, fold_settings))
+            model.fit(fold_train_features, y_train_counts)
             fold_threshold = threshold_series.loc[valid_idx] if threshold_series is not None else None
             fold_pred = model.predict_with_uncertainty(
-                features_df.loc[valid_idx],
+                fold_valid_features,
                 outbreak_threshold=fold_threshold,
             )[0]["risk_mean"].clip(0.0, 1.0)
             oof.loc[valid_idx] = fold_pred.astype(float)
         except Exception as fold_error:
+            fold_error_message = str(fold_error).strip().lower()
+            hard_fail_violation = any(marker in fold_error_message for marker in _BAYESIAN_OOF_HARD_FAIL_MARKERS)
+            if hard_fail_violation:
+                raise RuntimeError(
+                    f"Bayesian OOF fold failed due to strict contract/gate violation: {fold_error}"
+                ) from fold_error
             if fail_on_error:
                 raise RuntimeError(f"Bayesian OOF fold failed under strict/full mode: {fold_error}") from fold_error
             LOGGER.warning("Bayesian OOF fold skipped due to error: %s", fold_error)
@@ -344,12 +399,34 @@ def run_bayesian_phase(
     bayesian_risk_frame: pd.DataFrame | None = None
     bayesian_oof_score: pd.Series | None = None
     bayesian_idata: Any | None = None
-    bayesian_sampling_diagnostics: dict[str, Any] = {}
+    configured_covariates = list(
+        resolve_bayesian_climate_covariates(bayesian_settings=bayesian_settings_fullfit)
+    )
+    default_covariate_selection: dict[str, Any] = {
+        "requested_covariates": list(configured_covariates),
+        "selected_covariates": list(configured_covariates),
+        "excluded_covariates": [],
+        "missing_covariates": [],
+        "required_covariates": ["month", "year", "weekofyear"],
+        "required_covariates_present": True,
+        "viable_count": int(len(configured_covariates)),
+        "requested_count": int(len(configured_covariates)),
+    }
+    bayesian_sampling_diagnostics: dict[str, Any] = {
+        "climate_covariates": configured_covariates,
+        "climate_covariates_requested": list(configured_covariates),
+        "covariate_selection": default_covariate_selection,
+        "mode_used": "not_run" if skip_bayesian else "pending",
+        "degraded_mode": False,
+        "fallback_used": False,
+    }
     bayesian_metrics: dict[str, float] | None = None
     bayesian_metrics_fullfit: dict[str, float] | None = None
     bayesian_headline_eligible = False
     bayesian_convergence_payload: dict[str, Any] | None = None
     bayesian_converged: bool | None = None
+    suppressed_fullfit_reason = "bayesian_not_available"
+    suppressed_oof_reason = "bayesian_headline_not_available"
     convergence_failure_mode, convergence_mode_explicit, convergence_mode_auto_reason = _resolve_convergence_failure_mode(
         bayesian_settings=bayesian_settings_fullfit,
         strict_or_full_bayesian_mode=bool(strict_or_full_bayesian_mode),
@@ -373,23 +450,72 @@ def run_bayesian_phase(
         subset_count_target = bayesian_count_target.loc[subset_index]
         subset_threshold_series = bayesian_threshold_series.loc[subset_index]
 
-        bayes_track_kwargs: dict[str, Any] = {
-            "outbreak_threshold": subset_threshold_series,
-            "strict_dependencies": strict_bayesian_deps,
-            "bayesian_settings": bayesian_settings_fullfit,
-        }
-        bayes_track_signature = inspect.signature(run_bayesian_track_fn)
-        if "compute_backend_requested" in bayes_track_signature.parameters:
-            bayes_track_kwargs["compute_backend_requested"] = bayesian_compute_backend_requested
-        if "compute_backend_effective" in bayes_track_signature.parameters:
-            bayes_track_kwargs["compute_backend_effective"] = bayesian_compute_backend_effective
-
-        bayesian_risk_frame, bayesian_idata, bayesian_sampling_diagnostics = run_bayesian_track_fn(
-            subset_model_input_df,
-            subset_count_target,
-            **bayes_track_kwargs,
+        covariate_selection = select_bayesian_covariates_by_availability(
+            frame=subset_model_input_df,
+            requested_covariates=configured_covariates,
         )
+        selected_covariates = list(covariate_selection.get("selected_covariates", []))
+        bayesian_sampling_diagnostics["climate_covariates_requested"] = list(
+            covariate_selection.get("requested_covariates", configured_covariates)
+        )
+        bayesian_sampling_diagnostics["covariate_selection"] = covariate_selection
+        bayesian_sampling_diagnostics["climate_covariates"] = selected_covariates
+
+        if not selected_covariates:
+            LOGGER.warning(
+                "Bayesian track suppressed: no viable climate covariates after availability-first alignment. requested=%s excluded=%s",
+                covariate_selection.get("requested_covariates", []),
+                covariate_selection.get("excluded_covariates", []),
+            )
+            state.degraded_reasons.append(
+                {
+                    "code": "bayesian_no_viable_covariates",
+                    "reason": "no_viable_climate_covariates_after_alignment",
+                    "requested_covariates": list(covariate_selection.get("requested_covariates", [])),
+                    "excluded_covariates": list(covariate_selection.get("excluded_covariates", [])),
+                }
+            )
+            suppressed_fullfit_reason = "bayesian_no_viable_covariates"
+            suppressed_oof_reason = "bayesian_no_viable_covariates"
+            bayesian_sampling_diagnostics.update(
+                {
+                    "degraded_mode": True,
+                    "fallback_used": True,
+                    "mode_used": "suppressed_no_viable_covariates",
+                    "degraded_reason": "bayesian_no_viable_covariates",
+                    "error": "No Bayesian climate covariates passed availability-first alignment.",
+                }
+            )
+        else:
+            bayesian_settings_fullfit["climate_covariates"] = list(selected_covariates)
+            bayesian_settings_cv["climate_covariates"] = list(selected_covariates)
+
+            bayes_track_kwargs: dict[str, Any] = {
+                "outbreak_threshold": subset_threshold_series,
+                "strict_dependencies": strict_bayesian_deps,
+                "bayesian_settings": bayesian_settings_fullfit,
+            }
+            bayes_track_signature = inspect.signature(run_bayesian_track_fn)
+            if "compute_backend_requested" in bayes_track_signature.parameters:
+                bayes_track_kwargs["compute_backend_requested"] = bayesian_compute_backend_requested
+            if "compute_backend_effective" in bayes_track_signature.parameters:
+                bayes_track_kwargs["compute_backend_effective"] = bayesian_compute_backend_effective
+
+            bayesian_risk_frame, bayesian_idata, bayesian_sampling_diagnostics = run_bayesian_track_fn(
+                subset_model_input_df,
+                subset_count_target,
+                **bayes_track_kwargs,
+            )
+            bayesian_sampling_diagnostics["covariate_selection"] = covariate_selection
+            bayesian_sampling_diagnostics["climate_covariates_requested"] = list(
+                covariate_selection.get("requested_covariates", configured_covariates)
+            )
+            bayesian_sampling_diagnostics["climate_covariates"] = list(
+                bayesian_sampling_diagnostics.get("climate_covariates", selected_covariates)
+            )
         bayesian_sampling_diagnostics["bayesian_subset"] = subset_metadata
+        if "climate_covariates" not in bayesian_sampling_diagnostics:
+            bayesian_sampling_diagnostics["climate_covariates"] = configured_covariates
         if "compute_backend_requested" not in bayesian_sampling_diagnostics:
             bayesian_sampling_diagnostics["compute_backend_requested"] = str(bayesian_compute_backend_requested)
         if "compute_backend_effective" not in bayesian_sampling_diagnostics:
@@ -494,7 +620,7 @@ def run_bayesian_phase(
                     "bayesian_settings": bayesian_settings_cv,
                     "cv_config": effective_cv_config,
                     "threshold_series": subset_threshold_series,
-                    "fail_on_error": strict_or_full_bayesian_mode,
+                    "fail_on_error": True,
                 }
                 if "generate_time_splits_fn" in inspect.signature(collect_bayesian_oof_scores_fn).parameters:
                     bayes_oof_kwargs["generate_time_splits_fn"] = cv_split_callable
@@ -653,7 +779,7 @@ def run_bayesian_phase(
         bayesian_metrics_fullfit = build_suppressed_metric_payload(
             run_id=state.run_id,
             track="bayesian_fullfit",
-            reason="bayesian_not_available",
+            reason=suppressed_fullfit_reason,
         )
         safe_write_json_fn(bayesian_metrics_fullfit, bayesian_metrics_fullfit_path)
     state.artifacts["bayesian_metrics_fullfit"] = bayesian_metrics_fullfit_path
@@ -663,7 +789,7 @@ def run_bayesian_phase(
         bayesian_metrics = build_suppressed_metric_payload(
             run_id=state.run_id,
             track="bayesian_oof",
-            reason="bayesian_headline_not_available",
+            reason=suppressed_oof_reason,
         )
         safe_write_json_fn(bayesian_metrics, bayesian_metrics_path)
     state.artifacts["bayesian_metrics"] = bayesian_metrics_path

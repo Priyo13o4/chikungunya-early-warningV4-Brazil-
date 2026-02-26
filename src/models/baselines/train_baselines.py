@@ -7,7 +7,7 @@ import json
 import logging
 from pathlib import Path
 import pickle
-from typing import Iterable
+from typing import Any, Callable, Iterable
 
 import numpy as np
 import pandas as pd
@@ -77,6 +77,8 @@ def train_baselines(
     config: BaselineTrainingConfig = BaselineTrainingConfig(),
     cv_config: TimeSeriesCVConfig | None = None,
     output_dir: Path | None = None,
+    build_fold_ledger_fn: Callable[[pd.DataFrame, TimeSeriesCVConfig], list[dict[str, Any]]] = build_fold_ledger,
+    generate_time_splits_fn: Callable[[pd.DataFrame, TimeSeriesCVConfig], Any] = generate_time_splits,
 ) -> dict[str, BaselineModel]:
     """Train baseline models with leakage-safe temporal CV and persistence.
 
@@ -98,10 +100,10 @@ def train_baselines(
     training_frame[cv_cfg.target_column] = pd.to_numeric(y, errors="coerce").fillna(0.0)
 
     cv_metrics_records: list[dict[str, float | int | str]] = []
-    fold_ledger = build_fold_ledger(training_frame, cv_cfg)
+    fold_ledger = build_fold_ledger_fn(training_frame, cv_cfg)
     (output_root / "fold_ledger.json").write_text(json.dumps(fold_ledger, indent=2), encoding="utf-8")
     if config.enable_temporal_cv:
-        for fold_id, (train_idx, valid_idx) in enumerate(generate_time_splits(training_frame, cv_cfg), start=1):
+        for fold_id, (train_idx, valid_idx) in enumerate(generate_time_splits_fn(training_frame, cv_cfg), start=1):
             fold_dir = output_root / f"fold_{fold_id}"
             fold_dir.mkdir(parents=True, exist_ok=True)
 

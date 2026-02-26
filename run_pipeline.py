@@ -39,7 +39,9 @@ from src.models.baselines.cv_splitter import TimeSeriesCVConfig, build_fold_ledg
 from src.models.bayesian.diagnostics import check_convergence, extract_rhat_ess
 from src.pipeline_runtime import config_runtime as runtime_config
 from src.pipeline_runtime import compute_backend as runtime_backend
+from src.pipeline_runtime import curated_contract as runtime_curated_contract
 from src.pipeline_runtime import io_artifacts as runtime_artifacts
+from src.pipeline_runtime import memory_filters as runtime_memory_filters
 from src.pipeline_runtime.phase_context import SharedPhaseState
 from src.pipeline_runtime import phases_baseline as runtime_baseline
 from src.pipeline_runtime import phases_bayesian as runtime_bayesian
@@ -86,15 +88,6 @@ _ADAPTER_CALLABLE_KEYS: tuple[str, ...] = (
     "build_fold_ledger",
     "generate_time_splits",
 )
-_DISTRIBUTION_FIT_TOKENS: tuple[str, ...] = (
-    "zscore",
-    "standardized",
-    "standardised",
-    "minmax",
-    "quantile",
-    "boxcox",
-    "yeojohnson",
-)
 
 _CONTRACT_REPORT_FILES: tuple[str, ...] = (
     "run_manifest.json",
@@ -117,31 +110,62 @@ _CONTRACT_METRIC_FILES: tuple[str, ...] = (
     "bayesian_convergence_summary.csv",
     "bayesian_convergence_summary.md",
 )
+_DEFAULT_CURATED_MUNICIPALITIES_PATH = Path("resources/curated_municipalities_v1.json")
+_BAYESIAN_OOF_HARD_FAIL_MARKERS: tuple[str, ...] = (
+    "cv statistical gate failure",
+    "statistical_gate_failed",
+    "missing required climate covariates",
+    "pipeline must provide the configured bayesian covariate set explicitly",
+)
 
 
-def _build_model_input_df(
+def _find_forbidden_feature_columns(
     feature_df: pd.DataFrame,
     *,
     target_column: str = "outbreak_label",
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    dropped: list[str] = []
+) -> list[str]:
+    forbidden: list[str] = []
     for column in feature_df.columns:
-        column_lower = column.lower()
-        pattern_forbidden = any(pattern.match(column) for pattern in _FORBIDDEN_COLUMN_PATTERNS)
-        raw_case_alias = column_lower in _RAW_CASE_TARGET_ALIASES
-        direct_target_alias = column_lower == target_column.lower()
+        lowered = str(column).lower()
+        pattern_forbidden = any(pattern.match(str(column)) for pattern in _FORBIDDEN_COLUMN_PATTERNS)
+        raw_case_alias = lowered in _RAW_CASE_TARGET_ALIASES
+        direct_target_alias = lowered == target_column.lower()
         if pattern_forbidden or raw_case_alias or direct_target_alias:
-            dropped.append(column)
+            forbidden.append(str(column))
+    return sorted(set(forbidden))
 
-    output = feature_df.drop(columns=sorted(set(dropped)), errors="ignore").copy()
-    audit = {
-        "input_feature_count": int(feature_df.shape[1]),
-        "output_feature_count": int(output.shape[1]),
-        "dropped_forbidden_columns": sorted(set(dropped)),
-        "forbidden_patterns": [pattern.pattern for pattern in _FORBIDDEN_COLUMN_PATTERNS],
-        "raw_case_aliases": sorted(_RAW_CASE_TARGET_ALIASES),
-    }
-    return output, audit
+
+def _assert_no_forbidden_feature_columns(
+    feature_df: pd.DataFrame,
+    *,
+    target_column: str = "outbreak_label",
+    strict: bool = True,
+) -> None:
+    forbidden = _find_forbidden_feature_columns(feature_df, target_column=target_column)
+    if forbidden:
+        message = (
+            "Feature matrix contains forbidden/leaky columns. "
+            f"forbidden_columns={forbidden}"
+        )
+        if strict:
+            raise RuntimeError(f"{message} Cannot proceed in strict mode.")
+        LOGGER.warning("%s Proceeding because strict_feature_gate is disabled.", message)
+
+
+def _load_curated_municipality_contract(contract_path: Path) -> dict[str, Any]:
+    return runtime_curated_contract.load_curated_municipality_contract(contract_path)
+
+
+def _resolve_municipality_column(df: pd.DataFrame) -> str:
+    return runtime_curated_contract.resolve_municipality_column(df)
+
+
+def _apply_curated_municipality_filter(
+    df: pd.DataFrame,
+    *,
+    curated_ids: set[str],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    return runtime_curated_contract.apply_curated_municipality_filter(df, curated_ids=curated_ids)
 
 
 def _build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[str, Any]) -> Any:
@@ -160,8 +184,20 @@ def _build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[st
     sampling_backend = runtime_config.normalize_sampling_backend(
         bayesian_settings.get("sampling_backend", BayesianModelConfig.sampling_backend)
     )
+    raw_covariates = bayesian_settings.get("climate_covariates", BayesianModelConfig.climate_covariates)
+    if isinstance(raw_covariates, (list, tuple)):
+        climate_covariates = tuple(str(value).strip() for value in raw_covariates if str(value).strip())
+    else:
+        climate_covariates = BayesianModelConfig.climate_covariates
+    if not climate_covariates:
+        LOGGER.warning(
+            "Invalid bayesian_model.climate_covariates '%s'; using defaults",
+            raw_covariates,
+        )
+        climate_covariates = BayesianModelConfig.climate_covariates
 
     return BayesianModelConfig(
+        climate_covariates=climate_covariates,
         strict_dependencies=strict_dependencies,
         draws=int(bayesian_settings.get("draws", BayesianModelConfig.draws)),
         tune=int(bayesian_settings.get("tune", BayesianModelConfig.tune)),
@@ -287,17 +323,6 @@ def _is_brazil_adapter_config_active(adapter_config: dict[str, Any]) -> bool:
     if not callable_specs:
         return False
     return all(spec.startswith("projects.brazil_chik.") for spec in callable_specs)
-
-
-def _find_distribution_fit_columns(columns: list[str]) -> list[str]:
-    flagged: list[str] = []
-    for column in columns:
-        lowered = str(column).lower()
-        if "case" not in lowered and "rt" not in lowered:
-            continue
-        if any(token in lowered for token in _DISTRIBUTION_FIT_TOKENS):
-            flagged.append(str(column))
-    return sorted(set(flagged))
 
 
 def _audit_train_fold_threshold_scope(
@@ -567,9 +592,7 @@ def _json_compatible(value: Any) -> Any:
 
 
 def _stable_district_shard(value: Any, shard_count: int) -> int:
-    normalized = str(value).strip().lower()
-    digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()
-    return int(digest[:8], 16) % int(shard_count)
+    return runtime_memory_filters.stable_district_shard(value, shard_count)
 
 
 def _apply_memory_optimization_filters(
@@ -580,99 +603,13 @@ def _apply_memory_optimization_filters(
     date_column: str = "date",
     district_column: str = "district",
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
-    mode = str(config.mode or "off").lower()
-    report: dict[str, Any] = {
-        "mode": mode,
-        "active": False,
-        "reproducibility": {
-            "district_hash": "md5_lower_utf8_hex8_mod",
-        },
-        "inputs": {
-            "labeled_rows": int(len(labeled_df)),
-            "feature_rows": int(len(features_df)),
-            "labeled_districts": int(labeled_df.get(district_column, pd.Series(dtype=object)).nunique(dropna=True)),
-        },
-        "filters": {
-            "year_window": {
-                "requested": list(config.train_year_window) if config.train_year_window is not None else None,
-                "applied": False,
-            },
-            "district_shard": {
-                "requested_count": config.district_shard_count,
-                "requested_index": config.district_shard_index,
-                "applied": False,
-            },
-        },
-        "warnings": [],
-    }
-
-    if mode == "off":
-        report["outputs"] = {
-            "labeled_rows": int(len(labeled_df)),
-            "feature_rows": int(len(features_df)),
-            "labeled_districts": int(labeled_df.get(district_column, pd.Series(dtype=object)).nunique(dropna=True)),
-        }
-        return labeled_df, features_df, report
-
-    keep_mask = pd.Series(True, index=labeled_df.index, dtype="bool")
-
-    apply_year_filter = mode in {"year_window", "hybrid"}
-    if apply_year_filter:
-        if config.train_year_window is None:
-            report["warnings"].append("year_window_mode_requested_but_train_year_window_missing")
-        elif date_column not in labeled_df.columns:
-            report["warnings"].append("year_window_mode_requested_but_date_column_missing")
-        else:
-            start_year, end_year = config.train_year_window
-            date_series = pd.to_datetime(labeled_df[date_column], errors="coerce")
-            year_mask = date_series.dt.year.between(int(start_year), int(end_year), inclusive="both").fillna(False)
-            keep_mask &= year_mask
-            report["filters"]["year_window"].update(
-                {
-                    "applied": True,
-                    "effective": [int(start_year), int(end_year)],
-                    "kept_rows": int(year_mask.sum()),
-                }
-            )
-
-    apply_shard_filter = mode in {"district_shard", "hybrid"}
-    if apply_shard_filter:
-        shard_count = config.district_shard_count
-        shard_index = config.district_shard_index
-        if shard_count is None:
-            report["warnings"].append("district_shard_mode_requested_but_district_shard_count_missing")
-        elif district_column not in labeled_df.columns:
-            report["warnings"].append("district_shard_mode_requested_but_district_column_missing")
-        else:
-            safe_index = int(shard_index if shard_index is not None else 0) % int(shard_count)
-            district_values = labeled_df[district_column].fillna("__missing_district__").astype(str)
-            shard_series = district_values.map(lambda value: _stable_district_shard(value, int(shard_count)))
-            shard_mask = shard_series.eq(int(safe_index)).fillna(False)
-            keep_mask &= shard_mask
-            report["filters"]["district_shard"].update(
-                {
-                    "applied": True,
-                    "effective_count": int(shard_count),
-                    "effective_index": int(safe_index),
-                    "kept_rows": int(shard_mask.sum()),
-                }
-            )
-
-    filtered_labeled = labeled_df.loc[keep_mask].copy()
-    if features_df.index.equals(labeled_df.index):
-        filtered_features = features_df.loc[keep_mask].copy()
-    else:
-        selected_index = pd.Index(filtered_labeled.index)
-        filtered_features = features_df.loc[features_df.index.intersection(selected_index)].copy()
-
-    report["active"] = bool(len(filtered_labeled) != len(labeled_df))
-    report["outputs"] = {
-        "labeled_rows": int(len(filtered_labeled)),
-        "feature_rows": int(len(filtered_features)),
-        "labeled_districts": int(filtered_labeled.get(district_column, pd.Series(dtype=object)).nunique(dropna=True)),
-        "rows_removed": int(len(labeled_df) - len(filtered_labeled)),
-    }
-    return filtered_labeled, filtered_features, report
+    return runtime_memory_filters.apply_memory_optimization_filters(
+        labeled_df,
+        features_df,
+        config=config,
+        date_column=date_column,
+        district_column=district_column,
+    )
 
 
 def _build_suppressed_metric_payload(*, run_id: str, track: str, reason: str) -> dict[str, Any]:
@@ -852,6 +789,9 @@ def _run_bayesian_track(
         sampling_backend_requested,
         convergence_failure_mode,
     )
+    configured_covariates = list(
+        runtime_config.resolve_bayesian_climate_covariates(bayesian_settings=bayesian_settings)
+    )
 
     try:
         from src.models.bayesian.hierarchical_model import BayesianModelConfig, HierarchicalBayesianModel
@@ -894,6 +834,7 @@ def _run_bayesian_track(
         fallback_used = bool(float(bayesian_model.diagnostics_summary_.get("fallback", 0.0)) > 0.0)
         mode_used = "fallback" if fallback_used else ("simplified" if bayesian_model.simplified_used_ else "full_latent_ar")
         diagnostics = {
+            "climate_covariates": configured_covariates,
             "simplified_mode": bool(bayesian_model.simplified_used_),
             "force_full_bayesian": bool(config.force_full_bayesian),
             "mode_used": mode_used,
@@ -933,6 +874,7 @@ def _run_bayesian_track(
             else sampling_backend_fallback_reason
         )
         return None, None, {
+            "climate_covariates": configured_covariates,
             "degraded_mode": True,
             "fallback_used": True,
             "mode_used": "missing_dependencies",
@@ -1025,35 +967,72 @@ def _collect_bayesian_oof_scores(
 
     oof = pd.Series(np.nan, index=features_df.index, dtype="float64")
 
-    cv_frame = features_df.copy()
-    cv_frame[target_column] = pd.to_numeric(outbreak_target, errors="coerce").fillna(0).astype(int)
-    cv_config = TimeSeriesCVConfig(
-        date_column=cv_config.date_column or date_column,
-        target_column=cv_config.target_column or target_column,
-        start_train_year=cv_config.start_train_year,
-        first_valid_year=cv_config.first_valid_year,
-        last_valid_year=cv_config.last_valid_year,
-        train_window_years=cv_config.train_window_years,
-        thesis_strict=getattr(cv_config, "thesis_strict", False),
-        skip_single_class_folds=cv_config.skip_single_class_folds,
-        minimum_evaluated_folds=cv_config.minimum_evaluated_folds,
-    )
+    cv_effective = cv_config
+    if not str(cv_effective.date_column).strip() or not str(cv_effective.target_column).strip():
+        cv_payload = asdict(cv_effective)
+        if not str(cv_payload.get("date_column", "")).strip():
+            cv_payload["date_column"] = date_column
+        if not str(cv_payload.get("target_column", "")).strip():
+            cv_payload["target_column"] = target_column
+        cv_effective = TimeSeriesCVConfig(**cv_payload)
 
-    for train_idx, valid_idx in generate_time_splits_fn(cv_frame, cv_config):
+    cv_frame = features_df.copy()
+    cv_frame[cv_effective.target_column] = pd.to_numeric(outbreak_target, errors="coerce").fillna(0).astype(int)
+    requested_covariates = list(runtime_config.resolve_bayesian_climate_covariates(bayesian_settings=bayesian_settings))
+
+    for train_idx, valid_idx in generate_time_splits_fn(cv_frame, cv_effective):
         y_train_binary = pd.to_numeric(outbreak_target.loc[train_idx], errors="coerce").fillna(0).astype(int)
         y_train_counts = pd.to_numeric(count_target.loc[train_idx], errors="coerce").fillna(0.0)
         if y_train_binary.nunique(dropna=True) <= 1:
             continue
         try:
-            model = HierarchicalBayesianModel(config=_build_bayesian_config(strict_dependencies, bayesian_settings))
-            model.fit(features_df.loc[train_idx], y_train_counts)
+            fold_train_features = features_df.loc[train_idx]
+            fold_valid_features = features_df.loc[valid_idx]
+
+            train_selection = runtime_config.select_bayesian_covariates_by_availability(
+                frame=fold_train_features,
+                requested_covariates=requested_covariates,
+            )
+            train_selected_covariates = list(train_selection.get("selected_covariates", []))
+            if not train_selected_covariates:
+                LOGGER.warning(
+                    "Bayesian OOF fold skipped: no viable covariates in train split after availability alignment. requested=%s excluded=%s",
+                    train_selection.get("requested_covariates", requested_covariates),
+                    train_selection.get("excluded_covariates", []),
+                )
+                continue
+
+            valid_selection = runtime_config.select_bayesian_covariates_by_availability(
+                frame=fold_valid_features,
+                requested_covariates=train_selected_covariates,
+            )
+            fold_selected_covariates = list(valid_selection.get("selected_covariates", []))
+            if not fold_selected_covariates:
+                LOGGER.warning(
+                    "Bayesian OOF fold skipped: no viable covariates in validation split after availability alignment. train_selected=%s excluded=%s",
+                    train_selected_covariates,
+                    valid_selection.get("excluded_covariates", []),
+                )
+                continue
+
+            fold_settings = dict(bayesian_settings)
+            fold_settings["climate_covariates"] = fold_selected_covariates
+
+            model = HierarchicalBayesianModel(config=_build_bayesian_config(strict_dependencies, fold_settings))
+            model.fit(fold_train_features, y_train_counts)
             fold_threshold = threshold_series.loc[valid_idx] if threshold_series is not None else None
             fold_pred = model.predict_with_uncertainty(
-                features_df.loc[valid_idx],
+                fold_valid_features,
                 outbreak_threshold=fold_threshold,
             )[0]["risk_mean"].clip(0.0, 1.0)
             oof.loc[valid_idx] = fold_pred.astype(float)
         except Exception as fold_error:
+            fold_error_message = str(fold_error).strip().lower()
+            hard_fail_violation = any(marker in fold_error_message for marker in _BAYESIAN_OOF_HARD_FAIL_MARKERS)
+            if hard_fail_violation:
+                raise RuntimeError(
+                    f"Bayesian OOF fold failed due to strict contract/gate violation: {fold_error}"
+                ) from fold_error
             if fail_on_error:
                 raise RuntimeError(f"Bayesian OOF fold failed under strict/full mode: {fold_error}") from fold_error
             LOGGER.warning("Bayesian OOF fold skipped due to error: %s", fold_error)
@@ -1144,7 +1123,7 @@ def run(
     decision_loss: float = 1.0,
     lead_time_max_lookback_steps: int = 8,
     strict_bayesian_deps: bool = False,
-    strict_feature_gate: bool = False,
+    strict_feature_gate: bool = True,
     force_full_bayesian: bool = False,
     bayesian_overrides: dict[str, Any] | None = None,
     bayesian_profile_mode: str | None = None,
@@ -1325,6 +1304,12 @@ def run(
     else:
         LOGGER.info("No population data provided; merge phase completed with passthrough frame")
 
+    curated_contract_path = Path(
+        str(raw_model_config.get("curated_municipalities_path", _DEFAULT_CURATED_MUNICIPALITIES_PATH))
+    )
+    curated_contract = _load_curated_municipality_contract(curated_contract_path)
+    curated_municipality_ids = set(curated_contract["municipality_ids"])
+
     LOGGER.info("Phase: labels")
     labeled_df = runtime_config.call_label_outbreaks_compat(
         label_callable,
@@ -1334,6 +1319,16 @@ def run(
         cv_config=effective_cv_config,
         strict_mode=bool(strict_feature_gate),
     )
+    labeled_df, curated_filter_report = _apply_curated_municipality_filter(
+        labeled_df,
+        curated_ids=curated_municipality_ids,
+    )
+    if labeled_df.empty:
+        raise RuntimeError(
+            "Curated municipality filtering removed all labeled rows. "
+            f"contract_path={curated_contract_path}"
+        )
+
     threshold_scope_audit = runtime_baseline.audit_train_fold_threshold_scope(
         labeled_df,
         selected_percentile=selected_percentile,
@@ -1383,6 +1378,11 @@ def run(
         strict_validation=strict_feature_gate,
         write_output=True,
         output_path=feature_output,
+    )
+    _assert_no_forbidden_feature_columns(
+        features_df,
+        target_column="outbreak_label",
+        strict=bool(strict_feature_gate),
     )
     state.artifacts["labeled_data"] = labeled_output
     state.artifacts["feature_matrix"] = feature_output
@@ -1444,6 +1444,7 @@ def run(
             "model_config": runtime_artifacts.sha256_file(model_config_path),
             "adapter_config": runtime_artifacts.sha256_file(adapter_config_path) if adapter_config_path is not None else None,
             "cv_config": runtime_artifacts.sha256_file(cv_config_path),
+            "curated_municipalities_contract": curated_contract.get("sha256"),
         },
     }
 
@@ -1500,6 +1501,14 @@ def run(
                 "rows_before": int(memory_optimization_report.get("inputs", {}).get("labeled_rows", len(labeled_df))),
                 "rows_after": int(memory_optimization_report.get("outputs", {}).get("labeled_rows", len(labeled_df))),
             },
+            "curated_municipalities": {
+                "path": str(curated_contract_path),
+                "version": str(curated_contract.get("version", "v1")),
+                "source": str(curated_contract.get("source", "unknown")),
+                "count": int(curated_contract.get("count", 0)),
+                "sha256": curated_contract.get("sha256"),
+                "filter_report": curated_filter_report,
+            },
             "reproducibility": reproducibility_pack,
     }
     runtime_artifacts.safe_write_json(
@@ -1539,6 +1548,7 @@ def run(
         lead_time_max_lookback_steps=lead_time_max_lookback_steps,
         threshold_scope_audit=threshold_scope_audit,
         cv_ledger_callable=cv_ledger_callable,
+        cv_split_callable=cv_split_callable,
         train_baselines_fn=train_baselines,
         baseline_training_config_cls=BaselineTrainingConfig,
         predict_baselines_fn=predict_baselines,
@@ -1592,6 +1602,26 @@ def run(
     run_metadata_payload["sampling_backend_fallback_reason"] = bayesian_sampling_diagnostics.get(
         "sampling_backend_fallback_reason"
     )
+    covariates_effective_raw = bayesian_sampling_diagnostics.get("climate_covariates")
+    if covariates_effective_raw is None:
+        covariates_effective = []
+    else:
+        covariates_effective = list(covariates_effective_raw)
+
+    if (
+        "climate_covariates_requested" in bayesian_sampling_diagnostics
+        and bayesian_sampling_diagnostics.get("climate_covariates_requested") is not None
+    ):
+        covariates_requested = list(bayesian_sampling_diagnostics.get("climate_covariates_requested", []))
+    else:
+        covariates_requested = list(covariates_effective)
+
+    run_metadata_payload["bayesian_covariates_effective"] = covariates_effective
+    run_metadata_payload["bayesian_covariates_requested"] = covariates_requested
+    run_metadata_payload["bayesian_covariate_selection"] = bayesian_sampling_diagnostics.get(
+        "covariate_selection",
+        {},
+    )
     run_metadata_payload["bayesian_backend"] = {
         **run_metadata_payload.get("bayesian_backend", {}),
         "actual_runtime_backend": str(bayesian_sampling_diagnostics.get("actual_runtime_backend", "cpu")),
@@ -1609,6 +1639,22 @@ def run(
         ),
     }
     runtime_artifacts.safe_write_json(run_metadata_payload, run_metadata_path)
+
+    fold_ledger_path = state.artifacts.get("fold_ledger")
+    if fold_ledger_path is not None and Path(fold_ledger_path).exists():
+        try:
+            fold_ledger_payload = json.loads(Path(fold_ledger_path).read_text(encoding="utf-8"))
+        except Exception as fold_ledger_error:
+            LOGGER.warning("Unable to load fold_ledger artifact for covariate parity update: %s", fold_ledger_error)
+        else:
+            if isinstance(fold_ledger_payload, dict):
+                fold_ledger_payload["bayesian_covariates_requested"] = list(covariates_requested)
+                fold_ledger_payload["bayesian_covariates_effective"] = list(covariates_effective)
+                fold_ledger_payload["bayesian_covariate_selection"] = run_metadata_payload.get(
+                    "bayesian_covariate_selection",
+                    {},
+                )
+                runtime_artifacts.safe_write_json(fold_ledger_payload, Path(fold_ledger_path))
 
     eval_decision_result = runtime_eval_decision.run_evaluation_and_decision_phase(
         state=state,
@@ -1632,6 +1678,9 @@ def run(
         temporal_index=baseline_result.temporal_index,
         district_index=baseline_result.district_index,
         run_id=run_id,
+        bayesian_covariates_requested=list(covariates_requested),
+        bayesian_covariates_effective=list(covariates_effective),
+        bayesian_covariate_selection=run_metadata_payload.get("bayesian_covariate_selection", {}),
         decision_cost=decision_cost,
         decision_loss=decision_loss,
         decision_optimize_threshold=decision_optimize_threshold,
@@ -1893,8 +1942,21 @@ def run(
                 **memory_optimization_report,
                 "bayesian_subset": asdict(memory_optimization_config.bayesian_subset),
             },
+            "curated_municipalities": {
+                "path": str(curated_contract_path),
+                "version": str(curated_contract.get("version", "v1")),
+                "source": str(curated_contract.get("source", "unknown")),
+                "count": int(curated_contract.get("count", 0)),
+                "sha256": curated_contract.get("sha256"),
+                "filter_report": curated_filter_report,
+            },
             "artifacts": {name: str(path) for name, path in state.artifacts.items()},
             "contract_required_artifacts": sorted(contract_required_keys),
+            "bayesian_covariates": {
+                "requested": list(run_metadata_payload.get("bayesian_covariates_requested", [])),
+                "effective": list(run_metadata_payload.get("bayesian_covariates_effective", [])),
+                "selection": run_metadata_payload.get("bayesian_covariate_selection", {}),
+            },
             "headline_claims": {
                 "baseline_metrics": bool(baseline_result.baseline_headline_eligible),
                 "bayesian_metrics": bool(bayesian_result.bayesian_headline_eligible),

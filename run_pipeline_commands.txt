@@ -1,123 +1,79 @@
-# Chikungunya EWS - Run Commands (tmux-friendly, separated steps)
+# Chikungunya EWS - Run Commands (current validated set)
 # Workspace root:
-# /home/priyodip/chikungunya-early-warningV4-Brazil-
+# /Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4
 
 # ============================================================
-# A) One-time prep in your shell
+# A) Setup
 # ============================================================
-cd /home/priyodip/chikungunya-early-warningV4-Brazil-
-mkdir -p outputs/logs
+cd "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4"
+source .venv310/bin/activate
 
 # ============================================================
-# B) Create and enter tmux session
+# B) Quick integrity checks
 # ============================================================
-tmux new -s chik_run
-
-# If session already exists, attach:
-# tmux attach -t chik_run
+python -m pytest -q tests/test_bayesian_model.py tests/test_pipeline_smoke.py tests/test_metrics_integrity.py
 
 # ============================================================
-# C) Inside tmux: activate environment
+# C) Feature-stage pipeline only (fast, no model training)
 # ============================================================
-cd /home/priyodip/chikungunya-early-warningV4-Brazil-
-source scripts/activate_vm_env.sh
+python run_pipeline.py \
+  --start-year 2015 \
+  --end-year 2025 \
+  --skip-baselines \
+  --skip-bayesian \
+  --skip-visualizations \
+  --no-strict-feature-gate \
+  --log-level INFO
 
-# Optional (only if you use .env locally):
-# set -a
-# source .env
-# set +a
+# ============================================================
+# D) Baseline-enabled run (Bayesian skipped)
+# ============================================================
+python run_pipeline.py \
+  --start-year 2015 \
+  --end-year 2025 \
+  --skip-bayesian \
+  --skip-visualizations \
+  --no-strict-feature-gate \
+  --log-level INFO
 
 # ============================================================
-# D1) Inside tmux: full run (2 chains, 1000 iterations total = 500 tune + 500 draws)
+# E) Full run (includes Bayesian)
 # ============================================================
-python -u run_pipeline.py \
-  --adapter-config projects/brazil_chik/config.yaml \
-  --model-config config/model_config.yaml \
-  --cv-config config/cv_config.yaml \
-  --raw-data data/raw/Epiclim_Final_data.csv \
+python run_pipeline.py \
+  --start-year 2015 \
+  --end-year 2025 \
+  --skip-visualizations \
+  --no-strict-feature-gate \
+  --log-level INFO
+
+# ============================================================
+# F) Dev Bayesian profile run (faster than full Bayesian)
+# ============================================================
+python run_pipeline.py \
   --start-year 2015 \
   --end-year 2020 \
-  --selected-percentile 75 \
-  --bayesian-chains 2 \
-  --bayesian-tune 500 \
-  --bayesian-draws 500 \
-  --bayesian-progress
-
-# ============================================================
-# D2) Inside tmux: full run + skip visualizations (faster)
-# ============================================================
-python -u run_pipeline.py \
-  --adapter-config projects/brazil_chik/config.yaml \
-  --model-config config/model_config.yaml \
-  --cv-config config/cv_config.yaml \
-  --raw-data data/raw/Epiclim_Final_data.csv \
-  --start-year 2015 \
-  --end-year 2020 \
-  --selected-percentile 75 \
-  --skip-visualizations \
-  --bayesian-chains 2 \
-  --bayesian-tune 500 \
-  --bayesian-draws 500 \
-  --bayesian-progress
-
-# ============================================================
-# D3) Inside tmux: quick dev smoke run
-# ============================================================
-python -u run_pipeline.py \
-  --adapter-config projects/brazil_chik/config.yaml \
-  --model-config config/model_config.yaml \
-  --cv-config config/cv_config.yaml \
-  --raw-data data/raw/Epiclim_Final_data.csv \
-  --start-year 2020 \
-  --end-year 2020 \
-  --selected-percentile 75 \
-  --skip-visualizations \
   --bayesian-profile-mode dev \
-  --bayesian-progress
+  --skip-visualizations \
+  --no-strict-feature-gate \
+  --log-level INFO
 
 # ============================================================
-# E) tmux controls
+# G) Post-run contract checks
 # ============================================================
-# Detach from session (leave run active):
-# Ctrl+b then d
-
-# Re-attach later:
-# tmux attach -t chik_run
-
-# List sessions:
-# tmux ls
-
-# ============================================================
-# F) Optional live monitoring from another shell
-# ============================================================
-nvidia-smi
-free -h
-ps -ef | grep run_pipeline.py | grep -v grep
-
-# ============================================================
-# G) Stop run safely
-# ============================================================
-# Inside tmux where pipeline is running:
-# Ctrl+c
-
-# Or from another shell:
-# pkill -f "python -u run_pipeline.py"
-
-# ============================================================
-# H) Path sanity check (if errors occur)
-# ============================================================
-# projects/brazil_chik/config.yaml
-# config/model_config.yaml
-# config/cv_config.yaml
-# data/raw/Epiclim_Final_data.csv
-
-4. Enable Mouse Scrolling (Optional but highly recommended)
-If you want to use your Mac's trackpad to scroll up and read old print statements inside the tmux window:
-
-Press Ctrl + b
-
-Release both keys.
-
-Type : (Shift + semicolon). A yellow prompt will appear at the very bottom.
-
-Type set -g mouse on and press Enter
+python - <<'PY'
+import json, yaml, csv
+from pathlib import Path
+root = Path('.')
+cfg = yaml.safe_load((root/'config/model_config.yaml').read_text())
+cov = cfg.get('bayesian_model',{}).get('climate_covariates',[])
+with open(root/'data/features/feature_matrix.csv', newline='') as f:
+    header = next(csv.reader(f), [])
+missing = [c for c in cov if c not in header]
+rm = json.loads((root/'outputs/reports/run_metadata.json').read_text())
+mf = json.loads((root/'outputs/reports/run_manifest.json').read_text())
+rk = json.loads((root/'outputs/metrics/bayesian_risk_metadata.json').read_text())
+print('missing_covariates=', missing)
+print('rm_req=', rm.get('bayesian_covariates_requested'))
+print('mf_req=', (mf.get('bayesian_covariates') or {}).get('requested'))
+print('rk_req=', rk.get('covariates_requested'))
+PY

@@ -11,7 +11,8 @@ def _make_yearly_df(start_year: int = 2015, end_year: int = 2020) -> pd.DataFram
     return pd.DataFrame(
         {
             "date": pd.to_datetime([f"{year}-01-01" for year in years]),
-            "outbreak_label": [0, 1, 0, 1, 0, 1][: len(years)],
+            "outbreak_label": [1] * len(years),
+            "municipality_id": ["m1"] * len(years),
             "feature": list(range(len(years))),
         }
     )
@@ -43,6 +44,10 @@ def test_brazil_cv_adapter_thesis_strict_emits_exact_folds() -> None:
     assert observed == expected
     assert all(row["fold_mode"] == "thesis_strict" for row in ledger)
     assert all(row["thesis_strict"] is True for row in ledger)
+    assert all(row["reason"] == "ok" for row in yielded)
+    assert all((row["gate_metrics"] or {}).get("outbreaks_valid", 0) >= 1 for row in yielded)
+    assert all((row["gate_metrics"] or {}).get("municipalities_train", 0) >= 1 for row in yielded)
+    assert config.fail_on_gate_violation is True
 
 
 def test_brazil_cv_adapter_range_mode_respects_configured_bounds() -> None:
@@ -62,6 +67,9 @@ def test_brazil_cv_adapter_range_mode_respects_configured_bounds() -> None:
     assert observed == [(2016, 2018, 2019), (2016, 2019, 2020), (2016, 2020, 2021)]
     assert all(row["fold_mode"] == "range" for row in ledger)
     assert all(row["thesis_strict"] is False for row in ledger)
+    assert all((row["gate_metrics"] or {}).get("outbreaks_valid", 0) >= 1 for row in yielded)
+    assert all((row["gate_metrics"] or {}).get("municipalities_train", 0) >= 1 for row in yielded)
+    assert config.fail_on_gate_violation is True
 
 
 def test_brazil_cv_adapter_splits_match_ledger_deterministically() -> None:
@@ -91,3 +99,4 @@ def test_brazil_cv_adapter_splits_match_ledger_deterministically() -> None:
         ((0, 1, 2, 3), (4,)),
         ((0, 1, 2, 3, 4), (5,)),
     ]
+    assert config.fail_on_gate_violation is True

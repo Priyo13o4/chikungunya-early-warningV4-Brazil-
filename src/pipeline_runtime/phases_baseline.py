@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import inspect
 import logging
 from pathlib import Path
 import re
@@ -266,6 +267,7 @@ def run_baseline_phase(
     lead_time_max_lookback_steps: int,
     threshold_scope_audit: dict[str, Any],
     cv_ledger_callable: Callable[..., Any],
+    cv_split_callable: Callable[..., Any],
     train_baselines_fn: Callable[..., dict[str, Any]],
     baseline_training_config_cls: Any,
     predict_baselines_fn: Callable[..., pd.DataFrame],
@@ -339,15 +341,23 @@ def run_baseline_phase(
     baseline_evaluated_fold_count = 0
     if not skip_baselines:
         LOGGER.info("Baseline compute backend: %s", baseline_compute_backend)
-        baseline_models = train_baselines_fn(
-            model_input_df,
-            target,
-            model_names=model_names,
-            config=baseline_training_config_cls(
+        baseline_train_kwargs: dict[str, Any] = {
+            "model_names": model_names,
+            "config": baseline_training_config_cls(
                 random_state=effective_seed,
                 compute_backend=str(baseline_compute_backend),
             ),
-            cv_config=effective_cv_config,
+            "cv_config": effective_cv_config,
+        }
+        train_signature = inspect.signature(train_baselines_fn)
+        if "build_fold_ledger_fn" in train_signature.parameters:
+            baseline_train_kwargs["build_fold_ledger_fn"] = cv_ledger_callable
+        if "generate_time_splits_fn" in train_signature.parameters:
+            baseline_train_kwargs["generate_time_splits_fn"] = cv_split_callable
+        baseline_models = train_baselines_fn(
+            model_input_df,
+            target,
+            **baseline_train_kwargs,
         )
         baseline_predictions = predict_baselines_fn(baseline_models, model_input_df)
         if export_detailed_csv:

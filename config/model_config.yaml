@@ -16,6 +16,10 @@ baseline_models:
   - lightgbm
 bayesian_model:
   name: hierarchical_poisson
+  climate_covariates:
+    - month
+    - year
+    - weekofyear
   # sampling_backend: auto|pymc|jax_numpyro
   sampling_backend: auto
   draws: 500

@@ -38,7 +38,7 @@ class BayesianModelConfig:
     district_column: str = "district"
     date_column: str = "date"
     target_column: str = "cases"
-    climate_covariates: tuple[str, ...] = ("temp_anomaly", "degree_days_20", "rainfall_4wk", "lai_anomaly")
+    climate_covariates: tuple[str, ...] = ("month", "year", "weekofyear")
     draws: int = 1200
     tune: int = 1500
     chains: int = 2
@@ -84,6 +84,35 @@ class HierarchicalBayesianModel:
     simplified_used_: bool = False
     alpha_nb_: float = 1.0
 
+    def _validate_covariate_contract(
+        self,
+        frame: pd.DataFrame,
+        *,
+        context: str,
+        require_variance: bool,
+    ) -> pd.DataFrame:
+        missing_covariates = [covariate for covariate in self.config.climate_covariates if covariate not in frame.columns]
+        if missing_covariates:
+            raise ValueError(
+                f"{context}: missing required climate covariates {missing_covariates}. "
+                "Pipeline must provide the configured Bayesian covariate set explicitly."
+            )
+
+        validated = frame.copy()
+        for covariate in self.config.climate_covariates:
+            validated[covariate] = pd.to_numeric(validated[covariate], errors="coerce")
+            if validated[covariate].isna().any():
+                raise ValueError(
+                    f"{context}: covariate '{covariate}' contains null/non-numeric values after coercion. "
+                    "Silent Bayesian covariate imputation is disabled."
+                )
+            if require_variance and float(validated[covariate].std(ddof=0)) <= 1e-12:
+                raise ValueError(
+                    f"{context}: covariate '{covariate}' is degenerate (near-zero variance). "
+                    "Bayesian fit requires informative covariates."
+                )
+        return validated
+
     def _prepare_design(self, X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
         frame = X.copy()
         frame["__target__"] = pd.to_numeric(y, errors="coerce").fillna(0.0)
@@ -99,10 +128,7 @@ class HierarchicalBayesianModel:
         else:
             frame[self.config.date_column] = pd.date_range("2009-01-01", periods=len(frame), freq="W")
 
-        for covariate in self.config.climate_covariates:
-            if covariate not in frame.columns:
-                frame[covariate] = 0.0
-            frame[covariate] = pd.to_numeric(frame[covariate], errors="coerce").fillna(0.0)
+        frame = self._validate_covariate_contract(frame, context="fit", require_variance=True)
 
         frame[self.config.district_column] = frame[self.config.district_column].astype(str).fillna("unknown")
         frame = frame.sort_values([self.config.date_column, self.config.district_column]).copy()
@@ -123,7 +149,7 @@ class HierarchicalBayesianModel:
         self.beta_effects_ = {covariate: 0.0 for covariate in self.config.climate_covariates}
         self.alpha_nb_ = 1.0
         self.covariate_means_ = {
-            covariate: float(pd.to_numeric(frame[covariate], errors="coerce").fillna(0.0).mean())
+            covariate: float(pd.to_numeric(frame[covariate], errors="coerce").mean())
             for covariate in self.config.climate_covariates
         }
         self.covariate_scales_ = {covariate: 1.0 for covariate in self.config.climate_covariates}
@@ -218,9 +244,11 @@ class HierarchicalBayesianModel:
             dtype=float,
         )
 
-        feature_matrix = frame.loc[:, list(self.config.climate_covariates)].copy()
-        for covariate in self.config.climate_covariates:
-            feature_matrix[covariate] = pd.to_numeric(feature_matrix[covariate], errors="coerce").fillna(0.0)
+        feature_matrix = self._validate_covariate_contract(
+            frame.loc[:, list(self.config.climate_covariates)].copy(),
+            context="predict",
+            require_variance=False,
+        )
 
         means = np.asarray([self.covariate_means_.get(covariate, 0.0) for covariate in self.config.climate_covariates])
         scales = np.asarray([self.covariate_scales_.get(covariate, 1.0) for covariate in self.config.climate_covariates])
@@ -255,9 +283,7 @@ class HierarchicalBayesianModel:
         else:
             frame[self.config.date_column] = pd.NaT
 
-        for covariate in self.config.climate_covariates:
-            if covariate not in frame.columns:
-                frame[covariate] = 0.0
+        frame = self._validate_covariate_contract(frame, context="predict", require_variance=False)
 
         threshold_values, threshold_meta = self._resolve_outbreak_thresholds(frame, outbreak_threshold)
         district_effect, covariate_effect, time_effect, x_scaled = self._compute_linear_components(frame)
@@ -281,6 +307,7 @@ class HierarchicalBayesianModel:
                 "interval_source": "point_estimate",
                 "posterior_samples_used": 0,
                 "degraded_mode": True,
+                "climate_covariates": list(self.config.climate_covariates),
             }
             return risk_frame, metadata
 
@@ -400,6 +427,7 @@ class HierarchicalBayesianModel:
                 "interval_source": "posterior",
                 "posterior_samples_used": int(n_samples),
                 "degraded_mode": False,
+                "climate_covariates": list(self.config.climate_covariates),
             }
             return risk_frame, metadata
         except Exception as predictive_error:
@@ -419,6 +447,7 @@ class HierarchicalBayesianModel:
                 "interval_source": "point_estimate",
                 "posterior_samples_used": 0,
                 "degraded_mode": True,
+                "climate_covariates": list(self.config.climate_covariates),
             }
             return risk_frame, metadata
 

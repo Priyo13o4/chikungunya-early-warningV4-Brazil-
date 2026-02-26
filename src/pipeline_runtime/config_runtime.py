@@ -10,6 +10,7 @@ import random
 from typing import Any, Callable
 
 import numpy as np
+import pandas as pd
 
 from src.models.baselines.cv_splitter import TimeSeriesCVConfig
 from src.models.baselines.model_registry import list_default_model_names
@@ -19,6 +20,12 @@ from src.pipeline_runtime.compute_backend import parse_compute_backend_config as
 LOGGER = logging.getLogger(__name__)
 
 _SUPPORTED_BAYESIAN_SAMPLING_BACKENDS: set[str] = {"auto", "pymc", "jax_numpyro"}
+_DEFAULT_BAYESIAN_CLIMATE_COVARIATES: tuple[str, ...] = (
+    "month",
+    "year",
+    "weekofyear",
+)
+_BAYESIAN_COVARIATE_MIN_VARIANCE: float = 1e-12
 _SUPPORTED_BAYESIAN_PROFILE_MODES: set[str] = {"cv", "final", "dev"}
 _BAYESIAN_PROFILE_KEYS: tuple[str, ...] = (
     "chains",
@@ -93,7 +100,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--strict-feature-gate",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Fail pipeline when mechanistic feature quality gate flags near-degenerate features.",
     )
     parser.add_argument("--bayesian-draws", type=int, default=None, help="Override Bayesian posterior draws")
@@ -168,8 +176,13 @@ def build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[str
     sampling_backend = normalize_sampling_backend(
         bayesian_settings.get("sampling_backend", BayesianModelConfig.sampling_backend)
     )
+    climate_covariates = resolve_bayesian_climate_covariates(
+        bayesian_settings=bayesian_settings,
+        default_covariates=BayesianModelConfig.climate_covariates,
+    )
 
     return BayesianModelConfig(
+        climate_covariates=climate_covariates,
         strict_dependencies=strict_dependencies,
         draws=int(bayesian_settings.get("draws", BayesianModelConfig.draws)),
         tune=int(bayesian_settings.get("tune", BayesianModelConfig.tune)),
@@ -203,6 +216,115 @@ def build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[str
             bayesian_settings.get("predictive_chunk_rows", BayesianModelConfig.predictive_chunk_rows)
         ),
     )
+
+
+def resolve_bayesian_climate_covariates(
+    *,
+    bayesian_settings: dict[str, Any],
+    default_covariates: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    defaults = tuple(default_covariates or _DEFAULT_BAYESIAN_CLIMATE_COVARIATES)
+    raw_covariates = bayesian_settings.get("climate_covariates", defaults)
+    if isinstance(raw_covariates, (list, tuple)):
+        resolved_covariates = tuple(str(value).strip() for value in raw_covariates if str(value).strip())
+    else:
+        resolved_covariates = defaults
+    if not resolved_covariates:
+        LOGGER.warning(
+            "Invalid bayesian_model.climate_covariates '%s'; using defaults",
+            raw_covariates,
+        )
+        resolved_covariates = defaults
+    return resolved_covariates
+
+
+def select_bayesian_covariates_by_availability(
+    *,
+    frame: pd.DataFrame,
+    requested_covariates: list[str] | tuple[str, ...],
+    min_variance: float = _BAYESIAN_COVARIATE_MIN_VARIANCE,
+) -> dict[str, Any]:
+    requested = [str(value).strip() for value in requested_covariates if str(value).strip()]
+    unique_requested = list(dict.fromkeys(requested))
+    row_count = int(len(frame.index))
+
+    covariate_diagnostics: list[dict[str, Any]] = []
+    viable: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+
+    for order_index, covariate in enumerate(unique_requested):
+        if covariate not in frame.columns:
+            diagnostics = {
+                "name": covariate,
+                "available": False,
+                "reason": "missing_column",
+                "row_count": row_count,
+                "non_null_count": 0,
+                "null_or_non_numeric_count": row_count,
+                "availability_rate": 0.0,
+                "variance": None,
+            }
+            covariate_diagnostics.append(diagnostics)
+            excluded.append(diagnostics)
+            continue
+
+        numeric = pd.to_numeric(frame[covariate], errors="coerce")
+        non_null_count = int(numeric.notna().sum())
+        null_or_non_numeric_count = int(row_count - non_null_count)
+        availability_rate = float(non_null_count / max(row_count, 1))
+        null_rate = float(1.0 - availability_rate)
+        variance = float(numeric.var(ddof=0)) if non_null_count > 0 else 0.0
+
+        reason: str | None = None
+        if row_count <= 0:
+            reason = "no_rows"
+        elif non_null_count < row_count:
+            reason = "null_or_non_numeric_values"
+        elif variance <= float(min_variance):
+            reason = "degenerate_variance"
+
+        diagnostics = {
+            "name": covariate,
+            "available": reason is None,
+            "reason": reason,
+            "row_count": row_count,
+            "non_null_count": non_null_count,
+            "null_or_non_numeric_count": null_or_non_numeric_count,
+            "availability_rate": availability_rate,
+            "null_rate": null_rate,
+            "variance": variance,
+        }
+        covariate_diagnostics.append(diagnostics)
+        if reason is None:
+            viable.append({**diagnostics, "order_index": int(order_index)})
+        else:
+            excluded.append(diagnostics)
+
+    viable_sorted = sorted(
+        viable,
+        key=lambda item: (
+            float(item["null_rate"]),
+            -float(item["variance"]),
+            int(item["order_index"]),
+            str(item["name"]),
+        ),
+    )
+    selected_covariates = [str(item["name"]) for item in viable_sorted]
+    excluded_covariates = sorted(
+        [{key: value for key, value in item.items() if key != "order_index"} for item in excluded],
+        key=lambda item: str(item.get("name", "")),
+    )
+
+    return {
+        "selection_basis": "lowest_null_rate_then_variance",
+        "requested_covariates": unique_requested,
+        "selected_covariates": selected_covariates,
+        "excluded_covariates": excluded_covariates,
+        "covariate_diagnostics": covariate_diagnostics,
+        "row_count": row_count,
+        "viable_count": int(len(selected_covariates)),
+        "excluded_count": int(len(excluded_covariates)),
+    }
 
 
 def normalize_sampling_backend(raw_value: Any, default: str = "auto") -> str:
@@ -329,6 +451,12 @@ def resolve_cv_config(
         thesis_strict=bool(raw_cv_config.get("thesis_strict", False)),
         skip_single_class_folds=bool(raw_cv_config.get("skip_single_class_folds", True)),
         minimum_evaluated_folds=int(raw_cv_config.get("minimum_evaluated_folds", max(1, min(3, n_splits or 5)))),
+        min_outbreak_count_per_fold=int(raw_cv_config.get("min_outbreak_count_per_fold", 1)),
+        min_class_ratio_per_fold=float(raw_cv_config.get("min_class_ratio_per_fold", 0.0)),
+        max_class_ratio_per_fold=float(raw_cv_config.get("max_class_ratio_per_fold", 1.0)),
+        min_municipality_count_per_fold=int(raw_cv_config.get("min_municipality_count_per_fold", 1)),
+        min_train_span_years=int(raw_cv_config.get("min_train_span_years", 1)),
+        fail_on_gate_violation=bool(raw_cv_config.get("fail_on_gate_violation", True)),
     )
     effective = {
         **raw_cv_config,

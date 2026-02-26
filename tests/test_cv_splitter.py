@@ -12,6 +12,7 @@ def test_generate_time_splits_produces_splits() -> None:
         {
             "date": pd.date_range("2009-01-01", periods=12, freq="YS"),
             "outbreak_label": [0, 1] * 6,
+            "municipality_id": ["m1"] * 12,
             "x": range(12),
         }
     )
@@ -20,9 +21,13 @@ def test_generate_time_splits_produces_splits() -> None:
         last_valid_year=2018,
         train_window_years=4,
         skip_single_class_folds=False,
+        fail_on_gate_violation=False,
     )
+    ledger = build_fold_ledger(df, config)
     splits = list(generate_time_splits(df, config))
     assert len(splits) >= 1
+    assert any(entry["reason"] == "statistical_gate_failed" for entry in ledger)
+    assert config.fail_on_gate_violation is False
 
     years = pd.to_datetime(df["date"]).dt.year
     for train_idx, valid_idx in splits:
