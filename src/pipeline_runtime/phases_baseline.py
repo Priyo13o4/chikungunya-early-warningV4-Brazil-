@@ -291,6 +291,20 @@ def run_baseline_phase(
     district_index = labeled_df.get("district")
 
     model_input_df, leakage_audit = build_model_input_df(features_df, target_column="outbreak_label")
+
+    def _align_to_model_input(series: pd.Series | None) -> pd.Series | None:
+        if series is None:
+            return None
+        if len(series) == len(model_input_df):
+            return pd.Series(series.to_numpy(), index=model_input_df.index)
+        return series.reindex(model_input_df.index)
+
+    target = _align_to_model_input(target)
+    bayesian_count_target = _align_to_model_input(bayesian_count_target)
+    bayesian_threshold_series = _align_to_model_input(bayesian_threshold_series)
+    temporal_index = _align_to_model_input(temporal_index)
+    district_index = _align_to_model_input(district_index)
+
     distribution_fit_columns = find_distribution_fit_columns(model_input_df.columns.tolist())
     if distribution_fit_columns:
         message = (

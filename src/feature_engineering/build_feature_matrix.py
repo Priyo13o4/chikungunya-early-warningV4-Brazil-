@@ -17,6 +17,32 @@ from src.feature_engineering.validate_features import gate_mechanistic_features,
 
 LOGGER = logging.getLogger(__name__)
 
+_SPATIAL_LAT_CANDIDATES: tuple[str, ...] = ("lat", "latitude", "district_lat", "centroid_lat")
+_SPATIAL_LON_CANDIDATES: tuple[str, ...] = ("lon", "longitude", "lng", "district_lon", "centroid_lon")
+_MECHANISTIC_TEMP_CANDIDATES: tuple[str, ...] = (
+    "temp_kelvin",
+    "temperature_kelvin",
+    "t2m",
+    "temperature_celsius",
+    "temp_celsius",
+    "temperature",
+    "temp",
+    "mean_temp",
+)
+_MECHANISTIC_RAIN_CANDIDATES: tuple[str, ...] = ("rainfall", "precipitation", "rain_mm")
+_MECHANISTIC_LAI_CANDIDATES: tuple[str, ...] = ("lai", "leaf_area_index")
+_SPATIAL_ENGINEERED_COLUMNS: tuple[str, ...] = ("neighbor_mean_cases",)
+_MECHANISTIC_ENGINEERED_COLUMNS: tuple[str, ...] = (
+    "temp_kelvin",
+    "temp_celsius",
+    "temp_anomaly",
+    "degree_days_20",
+    "temp_optimal",
+    "rainfall_4wk",
+    "lai_anomaly",
+    "temp_rain_interaction",
+)
+
 DEFAULT_REQUIRED_FEATURES: tuple[str, ...] = (
     "month",
     "case_rolling_mean",
@@ -47,6 +73,16 @@ def build_feature_matrix(
     The default output path is ``data/features/feature_matrix.csv``.
     """
     LOGGER.info("Building feature matrix")
+    available_columns = set(df.columns)
+    has_latlon = any(column in available_columns for column in _SPATIAL_LAT_CANDIDATES) and any(
+        column in available_columns for column in _SPATIAL_LON_CANDIDATES
+    )
+    has_mechanistic_sources = (
+        any(column in available_columns for column in _MECHANISTIC_TEMP_CANDIDATES)
+        or any(column in available_columns for column in _MECHANISTIC_RAIN_CANDIDATES)
+        or any(column in available_columns for column in _MECHANISTIC_LAI_CANDIDATES)
+    )
+
     output = build_temporal_features(
         df,
         date_column=date_column,
@@ -56,12 +92,24 @@ def build_feature_matrix(
         output,
         date_column=date_column,
         district_column=district_column,
+        enable_neighbor_features=has_latlon,
     )
     output = build_mechanistic_features(
         output,
         date_column=date_column,
         district_column=district_column,
+        enable_climate_features=has_mechanistic_sources,
     )
+
+    impossible_columns: list[str] = []
+    if not has_latlon:
+        impossible_columns.extend(column for column in _SPATIAL_ENGINEERED_COLUMNS if column in output.columns)
+    if not has_mechanistic_sources:
+        impossible_columns.extend(column for column in _MECHANISTIC_ENGINEERED_COLUMNS if column in output.columns)
+    if impossible_columns:
+        unique_columns = sorted(set(impossible_columns))
+        LOGGER.info("Dropping impossible engineered features for current dataset profile: %s", unique_columns)
+        output = output.drop(columns=unique_columns)
 
     if enable_quality_gate:
         output, quality_gate_report = gate_mechanistic_features(

@@ -20,6 +20,12 @@ bayesian_model:
     - month
     - year
     - weekofyear
+    - rainfall
+    - temperature
+    - humidity
+    - precip_tot_sum
+    - temp_med_avg
+    - umid_med_avg
   # sampling_backend: auto|pymc|jax_numpyro
   sampling_backend: auto
   draws: 500

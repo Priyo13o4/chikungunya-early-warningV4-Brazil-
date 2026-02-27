@@ -163,16 +163,6 @@ def label_outbreaks(
                 start_train_year=start_train_year,
                 train_window_years=train_window_years,
             )
-            missing_mask = threshold_series.isna()
-            if missing_mask.any():
-                threshold_series = threshold_series.copy()
-                threshold_series.loc[missing_mask] = _past_only_thresholds(
-                    output.loc[missing_mask],
-                    district_column=district_column,
-                    case_column="cases",
-                    date_column=date_column,
-                    quantile=q,
-                )
         else:
             threshold_series = _past_only_thresholds(
                 output,

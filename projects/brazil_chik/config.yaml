@@ -1,5 +1,5 @@
 adapter:
-  load_data: projects.brazil_chik.data_adapter:run
+  load_data: src.data_preprocessing.load_data:run
   label_outbreaks: projects.brazil_chik.label_adapter:label_outbreaks
   build_feature_matrix: projects.brazil_chik.feature_adapter:build_feature_matrix
   build_fold_ledger: projects.brazil_chik.cv_adapter:build_fold_ledger

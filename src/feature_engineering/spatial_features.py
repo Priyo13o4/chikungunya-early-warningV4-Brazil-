@@ -54,6 +54,7 @@ def build_spatial_features(
     district_column: str = "district",
     date_column: str = "date",
     k_neighbors: int = 3,
+    enable_neighbor_features: bool = True,
 ) -> pd.DataFrame:
     """Build spatial proxy features without shapefile dependencies.
 
@@ -70,6 +71,10 @@ def build_spatial_features(
         output["district_code"] = output[district_column].astype("category").cat.codes
     else:
         LOGGER.warning("District column '%s' missing; spatial features limited", district_column)
+        return output
+
+    if not enable_neighbor_features:
+        LOGGER.info("Spatial neighbor features disabled for current dataset profile")
         return output
 
     lat_column, lon_column = _pick_coordinate_columns(output.columns)
@@ -170,6 +175,7 @@ def run(
     district_column: str = "district",
     date_column: str = "date",
     k_neighbors: int = 3,
+    enable_neighbor_features: bool = True,
 ) -> pd.DataFrame:
     """Entrypoint for spatial feature generation."""
     return build_spatial_features(
@@ -177,4 +183,5 @@ def run(
         district_column=district_column,
         date_column=date_column,
         k_neighbors=k_neighbors,
+        enable_neighbor_features=enable_neighbor_features,
     )

@@ -34,11 +34,15 @@ class BaselineTrainingConfig:
 
 
 def _accuracy(y_true: pd.Series, y_prob: pd.Series, threshold: float = 0.5) -> float:
-    labels = pd.to_numeric(y_true, errors="coerce").fillna(0.0).astype(int)
-    preds = (pd.to_numeric(y_prob, errors="coerce").fillna(0.0) >= threshold).astype(int)
-    if len(labels) == 0:
+    labels = pd.to_numeric(y_true, errors="coerce").fillna(0.0).to_numpy(dtype=int)
+    probs = pd.to_numeric(y_prob, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    if labels.size == 0 or probs.size == 0:
         return 0.0
-    return float((labels == preds).mean())
+    n = min(labels.size, probs.size)
+    if n == 0:
+        return 0.0
+    preds = (probs[:n] >= threshold).astype(int)
+    return float((labels[:n] == preds).mean())
 
 
 def _ensure_output_dir(output_dir: Path | None, config: BaselineTrainingConfig) -> Path:
@@ -107,10 +111,14 @@ def train_baselines(
             fold_dir = output_root / f"fold_{fold_id}"
             fold_dir.mkdir(parents=True, exist_ok=True)
 
-            X_train = X.loc[train_idx]
-            y_train = y.loc[train_idx]
-            X_valid = X.loc[valid_idx]
-            y_valid = y.loc[valid_idx]
+            train_positions = np.asarray(train_idx, dtype=int)
+            valid_positions = np.asarray(valid_idx, dtype=int)
+
+            X_train = X.iloc[train_positions]
+            y_train = y.iloc[train_positions]
+            X_valid = X.iloc[valid_positions]
+            y_valid = y.iloc[valid_positions]
+            valid_index = X.index.take(valid_positions)
 
             if pd.to_numeric(y_train, errors="coerce").dropna().nunique() <= 1:
                 LOGGER.info("Skipping fold_%d because training labels are single-class", fold_id)
@@ -146,7 +154,7 @@ def train_baselines(
                 )
 
             if fold_predictions:
-                pd.DataFrame(fold_predictions, index=valid_idx).to_csv(
+                pd.DataFrame(fold_predictions, index=valid_index).to_csv(
                     fold_dir / "predictions.csv",
                     index=True,
                 )

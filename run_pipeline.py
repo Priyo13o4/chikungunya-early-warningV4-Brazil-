@@ -313,16 +313,25 @@ def _is_brazil_adapter_config_active(adapter_config: dict[str, Any]) -> bool:
     if not isinstance(adapter_config, dict) or not adapter_config:
         return False
 
-    callable_specs: list[str] = []
+    load_data_spec: str | None = None
+    non_load_specs: list[str] = []
     for key in _ADAPTER_CALLABLE_KEYS:
         value = adapter_config.get(key)
-        if value is None:
+        if not value:
             continue
-        callable_specs.append(str(value).strip())
+        spec = str(value).strip()
+        if key == "load_data":
+            load_data_spec = spec
+            continue
+        non_load_specs.append(spec)
 
-    if not callable_specs:
+    if not non_load_specs:
         return False
-    return all(spec.startswith("projects.brazil_chik.") for spec in callable_specs)
+    if not all(spec.startswith("projects.brazil_chik.") for spec in non_load_specs):
+        return False
+    if load_data_spec is None:
+        return True
+    return load_data_spec.startswith("projects.brazil_chik.") or load_data_spec.startswith("src.")
 
 
 def _audit_train_fold_threshold_scope(
@@ -493,6 +502,55 @@ def _call_label_outbreaks_compat(
                 use_percentile_labels=use_percentile_labels,
             )
         raise
+
+
+def _call_build_feature_matrix_compat(
+    feature_callable: Callable[..., Any],
+    df: pd.DataFrame,
+    *,
+    strict_validation: bool,
+    write_output: bool,
+    output_path: Path,
+    enable_quality_gate: bool,
+    quality_gate_report_path: Path,
+) -> pd.DataFrame:
+    signature = inspect.signature(feature_callable)
+    parameters = signature.parameters
+    accepts_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+
+    kwargs: dict[str, Any] = {
+        "strict_validation": strict_validation,
+        "write_output": write_output,
+        "output_path": output_path,
+        "enable_quality_gate": enable_quality_gate,
+        "quality_gate_report_path": quality_gate_report_path,
+    }
+    if not accepts_var_kwargs:
+        kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+
+    try:
+        result = feature_callable(df, **kwargs)
+    except TypeError as call_error:
+        unsupported_kw_error = "unexpected keyword" in str(call_error).lower()
+        if kwargs and unsupported_kw_error:
+            fallback_kwargs = {
+                "strict_validation": strict_validation,
+                "write_output": write_output,
+                "output_path": output_path,
+            }
+            if not accepts_var_kwargs:
+                fallback_kwargs = {key: value for key, value in fallback_kwargs.items() if key in parameters}
+            LOGGER.info(
+                "Feature callable rejected quality-gate args (%s); falling back to legacy feature call shape",
+                call_error,
+            )
+            result = feature_callable(df, **fallback_kwargs)
+        else:
+            raise
+
+    if not isinstance(result, pd.DataFrame):
+        raise RuntimeError("Feature callable returned non-DataFrame output")
+    return result
 
 
 def _resolve_cv_config(
@@ -1304,30 +1362,48 @@ def run(
     else:
         LOGGER.info("No population data provided; merge phase completed with passthrough frame")
 
+    if "date" in merged_df.columns:
+        merged_df = merged_df.copy()
+        merged_df["date"] = pd.to_datetime(merged_df["date"], errors="coerce")
+    if "district" in merged_df.columns and "date" in merged_df.columns:
+        before_rows = int(len(merged_df))
+        merged_df = (
+            merged_df.sort_values(["district", "date"], ascending=[True, True], na_position="last")
+            .drop_duplicates(subset=["district", "date"], keep="last")
+            .reset_index(drop=True)
+        )
+        dropped_rows = int(before_rows - len(merged_df))
+        if dropped_rows > 0:
+            LOGGER.info(
+                "Pre-label canonicalization removed %s duplicate district/date rows",
+                dropped_rows,
+            )
+
     curated_contract_path = Path(
         str(raw_model_config.get("curated_municipalities_path", _DEFAULT_CURATED_MUNICIPALITIES_PATH))
     )
     curated_contract = _load_curated_municipality_contract(curated_contract_path)
     curated_municipality_ids = set(curated_contract["municipality_ids"])
 
+    label_input_df, curated_filter_report = _apply_curated_municipality_filter(
+        merged_df,
+        curated_ids=curated_municipality_ids,
+    )
+    if label_input_df.empty:
+        raise RuntimeError(
+            "Curated municipality filtering removed all rows before labeling. "
+            f"contract_path={curated_contract_path}"
+        )
+
     LOGGER.info("Phase: labels")
     labeled_df = runtime_config.call_label_outbreaks_compat(
         label_callable,
-        merged_df,
+        label_input_df,
         selected_percentile=selected_percentile,
         use_percentile_labels=True,
         cv_config=effective_cv_config,
         strict_mode=bool(strict_feature_gate),
     )
-    labeled_df, curated_filter_report = _apply_curated_municipality_filter(
-        labeled_df,
-        curated_ids=curated_municipality_ids,
-    )
-    if labeled_df.empty:
-        raise RuntimeError(
-            "Curated municipality filtering removed all labeled rows. "
-            f"contract_path={curated_contract_path}"
-        )
 
     threshold_scope_audit = runtime_baseline.audit_train_fold_threshold_scope(
         labeled_df,
@@ -1372,12 +1448,16 @@ def run(
     labeled_output = paths.data_processed / "epiclim_labeled.csv"
     labeled_df.to_csv(labeled_output, index=False)
     LOGGER.info("Phase: feature matrix")
+    feature_quality_gate_path = paths.outputs_reports / "feature_quality_gate_report.json"
     feature_output = paths.data_features / "feature_matrix.csv"
-    features_df = feature_callable(
+    features_df = _call_build_feature_matrix_compat(
+        feature_callable,
         labeled_df,
         strict_validation=strict_feature_gate,
         write_output=True,
         output_path=feature_output,
+        enable_quality_gate=True,
+        quality_gate_report_path=feature_quality_gate_path,
     )
     _assert_no_forbidden_feature_columns(
         features_df,
@@ -1517,7 +1597,6 @@ def run(
     )
     state.artifacts["run_metadata"] = run_metadata_path
 
-    feature_quality_gate_path = paths.outputs_reports / "feature_quality_gate_report.json"
     if not feature_quality_gate_path.exists():
         runtime_artifacts.safe_write_json(
             {

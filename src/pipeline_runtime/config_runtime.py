@@ -72,7 +72,7 @@ def parse_args() -> argparse.Namespace:
         help="Optional adapter config YAML with dynamic import paths for load/label/features/CV callables",
     )
     parser.add_argument("--cv-config", type=Path, default=Path("config/cv_config.yaml"), help="Path to temporal CV config YAML")
-    parser.add_argument("--raw-data", type=Path, default=Path("data/raw/Epiclim_Final_data.csv"), help="Path to raw CSV data file")
+    parser.add_argument("--raw-data", type=Path, default=Path("data/processed/brazil_chik_dataset_final.csv"), help="Path to raw CSV data file")
     parser.add_argument(
         "--population-data",
         type=Path,
@@ -411,16 +411,25 @@ def is_brazil_adapter_config_active(adapter_config: dict[str, Any]) -> bool:
     if not isinstance(adapter_config, dict) or not adapter_config:
         return False
 
-    callable_specs: list[str] = []
+    load_data_spec: str | None = None
+    non_load_specs: list[str] = []
     for key in _ADAPTER_CALLABLE_KEYS:
         value = adapter_config.get(key)
-        if value is None:
+        if not value:
             continue
-        callable_specs.append(str(value).strip())
+        spec = str(value).strip()
+        if key == "load_data":
+            load_data_spec = spec
+            continue
+        non_load_specs.append(spec)
 
-    if not callable_specs:
+    if not non_load_specs:
         return False
-    return all(spec.startswith("projects.brazil_chik.") for spec in callable_specs)
+    if not all(spec.startswith("projects.brazil_chik.") for spec in non_load_specs):
+        return False
+    if load_data_spec is None:
+        return True
+    return load_data_spec.startswith("projects.brazil_chik.") or load_data_spec.startswith("src.")
 
 
 def resolve_cv_config(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from pathlib import Path
 import re
 from typing import Any, Sequence
@@ -29,6 +30,15 @@ _DISTRIBUTION_FIT_TOKENS: tuple[str, ...] = (
     "boxcox",
     "yeojohnson",
 )
+
+_FORBIDDEN_OUTPUT_COLUMN_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^outbreak_label$", flags=re.IGNORECASE),
+    re.compile(r"^outbreak_label_.*$", flags=re.IGNORECASE),
+    re.compile(r"^outbreak_label_p.*$", flags=re.IGNORECASE),
+    re.compile(r"^threshold_.*$", flags=re.IGNORECASE),
+    re.compile(r"^threshold_p.*$", flags=re.IGNORECASE),
+)
+_FORBIDDEN_OUTPUT_CASE_ALIASES: set[str] = {"cases", "case_count", "weekly_cases", "outbreak_target", "target"}
 
 
 DEFAULT_REQUIRED_FEATURES: tuple[str, ...] = (
@@ -174,7 +184,12 @@ def _validate_features(
     if input_date_issues:
         issues.extend(input_date_issues)
 
-    leakage_columns = _find_leakage_columns([str(column) for column in input_df.columns])
+    leakage_columns = [
+        column
+        for column in _find_leakage_columns([str(column) for column in input_df.columns])
+        if not re.match(r"^outbreak_label($|_)", str(column), flags=re.IGNORECASE)
+        and not re.match(r"^threshold_", str(column), flags=re.IGNORECASE)
+    ]
     if leakage_columns:
         issues.append(f"found potential leakage columns in input: {leakage_columns}")
 
@@ -225,6 +240,18 @@ def _validate_features(
     return report
 
 
+def _find_forbidden_output_columns(columns: Sequence[str]) -> list[str]:
+    dropped: list[str] = []
+    for column in columns:
+        lowered = str(column).lower()
+        if lowered in _FORBIDDEN_OUTPUT_CASE_ALIASES:
+            dropped.append(str(column))
+            continue
+        if any(pattern.match(str(column)) for pattern in _FORBIDDEN_OUTPUT_COLUMN_PATTERNS):
+            dropped.append(str(column))
+    return sorted(set(dropped))
+
+
 def build_feature_matrix(
     df: pd.DataFrame,
     *,
@@ -241,14 +268,6 @@ def build_feature_matrix(
     write_output: bool = True,
     output_path: Path | None = None,
 ) -> pd.DataFrame:
-    _ = (
-        enable_quality_gate,
-        quality_gate_variance_threshold,
-        quality_gate_uniqueness_threshold,
-        quality_gate_min_non_missing_samples,
-        quality_gate_report_path,
-    )
-
     output = df.copy()
     if date_column in output.columns:
         output[date_column] = pd.to_datetime(output[date_column], errors="coerce")
@@ -267,6 +286,31 @@ def build_feature_matrix(
 
     if case_column != "cases":
         output["cases"] = output[case_column]
+
+    rainfall_column = _resolve_column(output, ("rainfall",))
+    if rainfall_column is None:
+        precip_column = _resolve_column(output, ("precip_tot_sum",))
+        if precip_column is not None:
+            output["rainfall"] = pd.to_numeric(output[precip_column], errors="coerce")
+
+    temperature_column = _resolve_column(output, ("temperature",))
+    if temperature_column is None:
+        temp_med_column = _resolve_column(output, ("temp_med_avg",))
+        temp_min_column = _resolve_column(output, ("temp_min_avg",))
+        temp_max_column = _resolve_column(output, ("temp_max_avg",))
+        if temp_med_column is not None:
+            output["temperature"] = pd.to_numeric(output[temp_med_column], errors="coerce")
+        elif temp_min_column is not None and temp_max_column is not None:
+            output["temperature"] = (
+                pd.to_numeric(output[temp_min_column], errors="coerce")
+                + pd.to_numeric(output[temp_max_column], errors="coerce")
+            ) / 2.0
+
+    humidity_column = _resolve_column(output, ("humidity",))
+    if humidity_column is None:
+        umid_med_column = _resolve_column(output, ("umid_med_avg",))
+        if umid_med_column is not None:
+            output["humidity"] = pd.to_numeric(output[umid_med_column], errors="coerce")
 
     output = output.sort_values([district_column, date_column]).reset_index(drop=True)
     grouped = output.groupby(district_column, dropna=False)
@@ -333,8 +377,17 @@ def build_feature_matrix(
         if column in output.columns:
             output[column] = pd.to_numeric(output[column], errors="coerce").fillna(0.0)
 
+    validation_report: dict[str, Any] = {
+        "passed": True,
+        "strict_mode": bool(strict_validation),
+        "issues": [],
+        "input_date_issues": [],
+        "leakage_columns": [],
+        "distribution_fit_columns": [],
+        "missing_required_features": [],
+    }
     if validate:
-        _validate_features(
+        validation_report = _validate_features(
             df,
             output,
             date_column=date_column,
@@ -342,6 +395,28 @@ def build_feature_matrix(
             required_features=required_features,
             strict=strict_validation,
         )
+
+    dropped_forbidden_columns = _find_forbidden_output_columns([str(column) for column in output.columns])
+    if dropped_forbidden_columns:
+        output = output.drop(columns=dropped_forbidden_columns, errors="ignore")
+
+    if enable_quality_gate:
+        report_payload: dict[str, Any] = {
+            "passed": bool(validation_report.get("passed", True)),
+            "strict_mode": bool(strict_validation),
+            "flagged_features": sorted(set(validation_report.get("issues", []))),
+            "dropped_features": dropped_forbidden_columns,
+            "variance_threshold": float(quality_gate_variance_threshold),
+            "uniqueness_threshold": float(quality_gate_uniqueness_threshold),
+            "min_non_missing_samples": int(quality_gate_min_non_missing_samples),
+            "missing_required_features": list(validation_report.get("missing_required_features", [])),
+            "distribution_fit_columns": list(validation_report.get("distribution_fit_columns", [])),
+            "input_date_issues": list(validation_report.get("input_date_issues", [])),
+            "leakage_columns_detected_in_input": list(validation_report.get("leakage_columns", [])),
+        }
+        report_target = quality_gate_report_path or Path("outputs/reports/feature_quality_gate_report.json")
+        report_target.parent.mkdir(parents=True, exist_ok=True)
+        report_target.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
 
     if write_output:
         final_output = output_path or Path("data/features/feature_matrix.csv")

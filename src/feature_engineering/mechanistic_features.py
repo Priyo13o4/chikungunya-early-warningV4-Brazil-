@@ -102,6 +102,7 @@ def build_mechanistic_features(
     *,
     district_column: str = "district",
     date_column: str = "date",
+    enable_climate_features: bool = True,
 ) -> pd.DataFrame:
     """Build mechanistic, climate-informed features conservatively.
 
@@ -123,6 +124,10 @@ def build_mechanistic_features(
     output = df.copy()
     output["month"] = _ensure_month_column(output, date_column=date_column)
     output["season"] = _extract_season(output["month"])
+
+    if not enable_climate_features:
+        LOGGER.info("Climate-derived mechanistic features disabled for current dataset profile")
+        return output
 
     temp_column = _pick_temperature_column(output.columns)
     rainfall_column = _pick_first_existing(output.columns, _RAINFALL_CANDIDATES)
@@ -222,6 +227,12 @@ def run(
     *,
     district_column: str = "district",
     date_column: str = "date",
+    enable_climate_features: bool = True,
 ) -> pd.DataFrame:
     """Entrypoint for mechanistic feature generation."""
-    return build_mechanistic_features(df, district_column=district_column, date_column=date_column)
+    return build_mechanistic_features(
+        df,
+        district_column=district_column,
+        date_column=date_column,
+        enable_climate_features=enable_climate_features,
+    )
