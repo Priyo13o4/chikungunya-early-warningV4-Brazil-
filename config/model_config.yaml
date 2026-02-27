@@ -27,8 +27,8 @@ bayesian_model:
   tune: 3000
   chains: 4
   bayesian_progress: true
-  target_accept: 0.98
-  max_treedepth: 16
+  target_accept: 0.95
+  max_treedepth: 12
   force_full_bayesian: false
   # Optional: strict|warn. If omitted, strict applies only in strict/full runs;
   # low-sample smoke settings (chains < 2 or draws < 50) auto-downgrade to warn.
@@ -47,15 +47,15 @@ bayesian_model_profiles:
     chains: 2
     tune: 1500
     draws: 1500
-    target_accept: 0.97
-    max_treedepth: 14
+    target_accept: 0.90
+    max_treedepth: 10
     bayesian_progress: false
   final:
     chains: 4
     tune: 3000
     draws: 3000
-    target_accept: 0.98
-    max_treedepth: 16
+    target_accept: 0.95
+    max_treedepth: 12
     bayesian_progress: true
   dev:
     chains: 1

@@ -545,37 +545,6 @@ class HierarchicalBayesianModel:
         )
         return requested_sampling_backend, effective_sampling_backend
 
-    @staticmethod
-    def _build_noncentered_ar1_latent_state(pm: Any) -> Any:
-        try:
-            import pytensor.tensor as pt
-            from pytensor.scan import scan
-        except Exception as import_error:
-            raise ImportError("Manual AR(1) latent state requires 'pytensor'.") from import_error
-
-        rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.8)
-        rho = pm.Deterministic("rho", 0.95 * pm.math.tanh(rho_raw))
-        sigma_z = pm.HalfNormal("sigma_z", sigma=0.35)
-        eps_t = pm.Normal("eps_t", mu=0.0, sigma=1.0, dims="time")
-
-        z_0 = sigma_z * eps_t[0] / pm.math.sqrt(1.0 - rho**2 + 1e-6)
-
-        model_ctx = pm.modelcontext(None)
-        time_coord = model_ctx.coords.get("time") if model_ctx is not None else None
-        if time_coord is not None and len(time_coord) == 1:
-            return pm.Deterministic("z_t", z_0[None], dims="time")
-
-        def _ar1_step(eps_curr: Any, prev_z: Any, ar_rho: Any, ar_sigma_z: Any) -> Any:
-            return ar_rho * prev_z + ar_sigma_z * eps_curr
-
-        z_tail, _ = scan(
-            fn=_ar1_step,
-            sequences=[eps_t[1:]],
-            outputs_info=[z_0],
-            non_sequences=[rho, sigma_z],
-        )
-        return pm.Deterministic("z_t", pt.concatenate([z_0[None], z_tail]), dims="time")
-
     def _fit_jax_numpyro_model(
         self,
         *,
@@ -624,7 +593,16 @@ class HierarchicalBayesianModel:
                 z_t_values = np.zeros(len(times), dtype=float)
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
-                z_t = self._build_noncentered_ar1_latent_state(pm)
+                rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.8)
+                rho = pm.Deterministic("rho", 0.95 * pm.math.tanh(rho_raw))
+                sigma_z = pm.HalfNormal("sigma_z", sigma=0.35)
+                z_t = pm.AR(
+                    "z_t",
+                    rho=rho,
+                    sigma=sigma_z,
+                    init_dist=pm.Normal.dist(mu=0.0, sigma=0.35),
+                    dims="time",
+                )
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta) + z_t[time_idx]
                 z_t_values = np.full(len(times), np.nan, dtype=float)
 
@@ -708,7 +686,16 @@ class HierarchicalBayesianModel:
                 z_t_values = np.zeros(len(times), dtype=float)
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
-                z_t = self._build_noncentered_ar1_latent_state(pm)
+                rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.8)
+                rho = pm.Deterministic("rho", 0.95 * pm.math.tanh(rho_raw))
+                sigma_z = pm.HalfNormal("sigma_z", sigma=0.35)
+                z_t = pm.AR(
+                    "z_t",
+                    rho=rho,
+                    sigma=sigma_z,
+                    init_dist=pm.Normal.dist(mu=0.0, sigma=0.35),
+                    dims="time",
+                )
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta) + z_t[time_idx]
                 z_t_values = np.full(len(times), np.nan, dtype=float)
 
