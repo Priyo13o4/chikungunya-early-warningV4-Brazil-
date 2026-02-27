@@ -8,6 +8,9 @@
 cd "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4"
 source .venv310/bin/activate
 
+# Optional: force unbuffered Python output so progress bars/logs stream live
+export PYTHONUNBUFFERED=1
+
 # ============================================================
 # B) Quick integrity checks
 # ============================================================
@@ -45,6 +48,7 @@ python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2025 \
+  --bayesian-progress \
   --skip-visualizations \
   --no-strict-feature-gate \
   --log-level INFO
@@ -57,6 +61,7 @@ python run_pipeline.py \
   --start-year 2015 \
   --end-year 2020 \
   --bayesian-profile-mode dev \
+  --bayesian-progress \
   --skip-visualizations \
   --no-strict-feature-gate \
   --log-level INFO
