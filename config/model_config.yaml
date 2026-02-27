@@ -2,7 +2,7 @@ random_seed: 42
 
 compute_backend:
   # mode: auto|cpu|macos_metal|nvidia_cuda
-  mode: nvidia_cuda
+  mode: auto
   # prefer_gpu_for: baselines|bayesian|both
   prefer_gpu_for: both
   fallback: cpu
@@ -17,18 +17,17 @@ bayesian_model:
   name: hierarchical_poisson
   climate_covariates:
     - month
-    - year
     - rainfall
     - temperature
     - humidity
   # sampling_backend: auto|pymc|jax_numpyro
   sampling_backend: auto
-  draws: 2000
-  tune: 2000
+  draws: 3000
+  tune: 3000
   chains: 4
   bayesian_progress: true
-  target_accept: 0.97
-  max_treedepth: 14
+  target_accept: 0.98
+  max_treedepth: 16
   force_full_bayesian: false
   # Optional: strict|warn. If omitted, strict applies only in strict/full runs;
   # low-sample smoke settings (chains < 2 or draws < 50) auto-downgrade to warn.
@@ -45,17 +44,17 @@ bayesian_model:
 bayesian_model_profiles:
   cv:
     chains: 2
-    tune: 1000
-    draws: 1000
-    target_accept: 0.95
-    max_treedepth: 12
+    tune: 1500
+    draws: 1500
+    target_accept: 0.97
+    max_treedepth: 14
     bayesian_progress: false
   final:
     chains: 4
-    tune: 2000
-    draws: 2000
-    target_accept: 0.97
-    max_treedepth: 14
+    tune: 3000
+    draws: 3000
+    target_accept: 0.98
+    max_treedepth: 16
     bayesian_progress: true
   dev:
     chains: 1

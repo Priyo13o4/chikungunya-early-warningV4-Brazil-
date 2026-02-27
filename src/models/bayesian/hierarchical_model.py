@@ -488,10 +488,12 @@ class HierarchicalBayesianModel:
 
     def _needs_simplification(self, diagnostics: dict[str, float]) -> bool:
         divergence_count = diagnostics.get("divergences", 0.0)
+        max_tree_depth = diagnostics.get("max_tree_depth", float("nan"))
         rhat_max = diagnostics.get("r_hat_max", float("nan"))
         ess_min = diagnostics.get("ess_min", float("nan"))
         return bool(
             divergence_count > float(self.config.divergence_warn_threshold)
+            or (np.isfinite(max_tree_depth) and max_tree_depth >= float(self.config.max_treedepth))
             or (np.isfinite(rhat_max) and rhat_max > float(self.config.rhat_warn_threshold))
             or (np.isfinite(ess_min) and ess_min < float(self.config.ess_warn_threshold))
         )

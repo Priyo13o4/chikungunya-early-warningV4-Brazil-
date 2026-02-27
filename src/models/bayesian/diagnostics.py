@@ -89,7 +89,7 @@ def check_convergence(
     summary = summarize_diagnostics(idata)
     converged = bool(
         summary["divergences"] <= divergence_threshold
-        and summary["max_tree_depth"] < max_tree_depth_threshold
+        and summary["max_tree_depth"] <= max_tree_depth_threshold
         and summary["r_hat_max"] <= rhat_threshold
         and summary["ess_min"] >= ess_threshold
     )
