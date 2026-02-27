@@ -2,7 +2,7 @@ random_seed: 42
 
 compute_backend:
   # mode: auto|cpu|macos_metal|nvidia_cuda
-  mode: auto
+  mode: nvidia_cuda
   # prefer_gpu_for: baselines|bayesian|both
   prefer_gpu_for: both
   fallback: cpu
@@ -13,27 +13,22 @@ baseline_models:
   - poisson_regression
   - random_forest
   - xgboost
-  - lightgbm
 bayesian_model:
   name: hierarchical_poisson
   climate_covariates:
     - month
     - year
-    - weekofyear
     - rainfall
     - temperature
     - humidity
-    - precip_tot_sum
-    - temp_med_avg
-    - umid_med_avg
   # sampling_backend: auto|pymc|jax_numpyro
   sampling_backend: auto
-  draws: 500
-  tune: 500
-  chains: 2
+  draws: 2000
+  tune: 2000
+  chains: 4
   bayesian_progress: true
-  target_accept: 0.9
-  max_treedepth: 10
+  target_accept: 0.97
+  max_treedepth: 14
   force_full_bayesian: false
   # Optional: strict|warn. If omitted, strict applies only in strict/full runs;
   # low-sample smoke settings (chains < 2 or draws < 50) auto-downgrade to warn.
@@ -44,28 +39,28 @@ bayesian_model:
   rhat_warn_threshold: 1.05
   ess_warn_threshold: 200.0
   outbreak_threshold_default_cases: 1.0
-  posterior_sample_cap: 300
+  posterior_sample_cap: 500
   predictive_chunk_rows: 4000
 
 bayesian_model_profiles:
   cv:
     chains: 2
-    tune: 500
-    draws: 500
-    target_accept: 0.9
-    max_treedepth: 10
+    tune: 1000
+    draws: 1000
+    target_accept: 0.95
+    max_treedepth: 12
     bayesian_progress: false
   final:
-    chains: 2
-    tune: 500
-    draws: 500
-    target_accept: 0.9
-    max_treedepth: 10
+    chains: 4
+    tune: 2000
+    draws: 2000
+    target_accept: 0.97
+    max_treedepth: 14
     bayesian_progress: true
   dev:
     chains: 1
-    tune: 100
-    draws: 80
+    tune: 200
+    draws: 150
     target_accept: 0.9
     max_treedepth: 10
     bayesian_progress: false

@@ -1,11 +1,22 @@
 {
   "passed": true,
-  "strict_mode": false,
+  "strict_mode": true,
+  "flagged_features": [],
+  "dropped_features": [
+    "cases",
+    "outbreak_label",
+    "outbreak_label_p70",
+    "outbreak_label_p75",
+    "outbreak_label_p80",
+    "threshold_p70",
+    "threshold_p75",
+    "threshold_p80"
+  ],
   "variance_threshold": 1e-10,
   "uniqueness_threshold": 0.01,
   "min_non_missing_samples": 24,
-  "mechanistic_features_checked": [],
-  "flagged_features": [],
-  "dropped_features": [],
-  "feature_details": {}
+  "missing_required_features": [],
+  "distribution_fit_columns": [],
+  "input_date_issues": [],
+  "leakage_columns_detected_in_input": []
 }

@@ -1,16 +1,7 @@
 {
-  "input_feature_count": 26,
-  "output_feature_count": 18,
-  "dropped_forbidden_columns": [
-    "cases",
-    "outbreak_label",
-    "outbreak_label_p70",
-    "outbreak_label_p75",
-    "outbreak_label_p80",
-    "threshold_p70",
-    "threshold_p75",
-    "threshold_p80"
-  ],
+  "input_feature_count": 40,
+  "output_feature_count": 40,
+  "dropped_forbidden_columns": [],
   "forbidden_patterns": [
     "^outbreak_label$",
     "^outbreak_label_.*$",
@@ -27,39 +18,8 @@
   ],
   "train_fold_threshold_scope_audit": {
     "checked": true,
-    "violation_count": 47253,
-    "sample_violations": [
-      {
-        "valid_year": 2016,
-        "district": "Rio Branco",
-        "observed_threshold": 3.0,
-        "expected_train_quantile": 0.0
-      },
-      {
-        "valid_year": 2016,
-        "district": "Rio Branco",
-        "observed_threshold": 3.0,
-        "expected_train_quantile": 0.0
-      },
-      {
-        "valid_year": 2016,
-        "district": "Rio Branco",
-        "observed_threshold": 3.0,
-        "expected_train_quantile": 0.0
-      },
-      {
-        "valid_year": 2016,
-        "district": "Rio Branco",
-        "observed_threshold": 3.0,
-        "expected_train_quantile": 0.0
-      },
-      {
-        "valid_year": 2016,
-        "district": "Rio Branco",
-        "observed_threshold": 3.0,
-        "expected_train_quantile": 0.0
-      }
-    ],
+    "violation_count": 0,
+    "sample_violations": [],
     "missing_columns": [],
     "reason": "ok"
   },

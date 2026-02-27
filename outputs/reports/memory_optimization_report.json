@@ -1,14 +1,14 @@
 {
-  "run_id": "20260226T155618Z-67ac60ed",
+  "run_id": "20260227T042820Z-c21e0858",
   "mode": "off",
   "active": false,
   "reproducibility": {
     "district_hash": "md5_lower_utf8_hex8_mod"
   },
   "inputs": {
-    "labeled_rows": 172200,
-    "feature_rows": 172200,
-    "labeled_districts": 299
+    "labeled_rows": 74124,
+    "feature_rows": 74124,
+    "labeled_districts": 284
   },
   "filters": {
     "year_window": {
@@ -23,9 +23,9 @@
   },
   "warnings": [],
   "outputs": {
-    "labeled_rows": 172200,
-    "feature_rows": 172200,
-    "labeled_districts": 299
+    "labeled_rows": 74124,
+    "feature_rows": 74124,
+    "labeled_districts": 284
   },
   "bayesian_subset": {
     "enabled": false,

@@ -1,9 +1,9 @@
 {
-  "run_id": "20260226T155618Z-67ac60ed",
-  "started_at_utc": "2026-02-26T15:56:18.319775+00:00",
+  "run_id": "20260227T042820Z-c21e0858",
+  "started_at_utc": "2026-02-27T04:28:20.628312+00:00",
   "effective_seed": 42,
   "model_config_path": "config/model_config.yaml",
-  "adapter_config_path": null,
+  "adapter_config_path": "projects/brazil_chik/config.yaml",
   "cv_config_path": "config/cv_config.yaml",
   "effective_cv_config": {
     "strategy": "time_series_split",
@@ -27,38 +27,38 @@
     "fail_on_gate_violation": true
   },
   "adapter": {
-    "enabled": false,
+    "enabled": true,
     "callables": {
-      "load_data": "default",
-      "label_outbreaks": "default",
-      "build_feature_matrix": "default",
-      "build_fold_ledger": "default",
-      "generate_time_splits": "default"
+      "load_data": "src.data_preprocessing.load_data:run",
+      "label_outbreaks": "projects.brazil_chik.label_adapter:label_outbreaks",
+      "build_feature_matrix": "projects.brazil_chik.feature_adapter:build_feature_matrix",
+      "build_fold_ledger": "projects.brazil_chik.cv_adapter:build_fold_ledger",
+      "generate_time_splits": "projects.brazil_chik.cv_adapter:generate_time_splits"
     },
-    "brazil_adapter_active": false
+    "brazil_adapter_active": true
   },
   "bayesian_mode_control": {
     "force_full_requested": false,
     "force_full_effective": false,
-    "brazil_adapter_active": false,
+    "brazil_adapter_active": true,
     "bayesian_simplified_mode": false,
-    "max_convergence_retries": 1,
-    "convergence_failure_mode": "warn"
+    "max_convergence_retries": 0,
+    "convergence_failure_mode": "strict"
   },
   "bayesian_backend": {
     "requested_backend": "auto",
-    "resolved_backend": "nvidia_cuda",
+    "resolved_backend": "macos_metal",
     "actual_runtime_backend": "cpu",
-    "backend_implemented": false,
-    "fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
+    "backend_implemented": true,
+    "fallback_reason": null,
     "sampling_backend_requested": "auto",
     "sampling_backend_effective": "pymc",
-    "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
+    "sampling_backend_fallback_reason": null,
     "sampling_backend_requested_source": "bayesian_model"
   },
   "sampling_backend_requested": "auto",
   "sampling_backend_effective": "pymc",
-  "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
+  "sampling_backend_fallback_reason": null,
   "bayesian_profile_usage": {
     "profile_mode_override": null,
     "default_routing": "fullfit=final,oof=cv",
@@ -124,30 +124,31 @@
       "configured": true
     },
     "effective": {
-      "baseline_backend": "nvidia_cuda",
-      "bayesian_backend": "nvidia_cuda"
+      "baseline_backend": "macos_metal",
+      "bayesian_backend": "macos_metal"
     },
-    "baseline_backend": "nvidia_cuda",
-    "bayesian_backend": "nvidia_cuda",
+    "baseline_backend": "macos_metal",
+    "bayesian_backend": "macos_metal",
     "fallback": "cpu",
     "fallback_used": false,
     "reason_logs": [],
     "capabilities": {
-      "macos_metal": false,
-      "nvidia_cuda": true,
+      "macos_metal": true,
+      "nvidia_cuda": false,
       "details": {
-        "platform": "Linux",
+        "platform": "Darwin",
         "macos_metal": {
-          "reason": "non_macos"
-        },
-        "nvidia_cuda": {
+          "platform": "Darwin",
           "probes": [
             {
-              "source": "nvidia-smi -L",
+              "source": "xcrun -f metal",
               "returncode": 0,
-              "stdout": "GPU 0: NVIDIA L4 (UUID: GPU-a1266934-6865-885f-4982-5144435ef096)"
+              "stdout": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"
             }
           ]
+        },
+        "nvidia_cuda": {
+          "probes": []
         }
       }
     },
@@ -156,7 +157,7 @@
         "track": "baseline",
         "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "nvidia_cuda",
+        "effective_backend": "macos_metal",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
@@ -165,7 +166,7 @@
         "track": "bayesian",
         "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "nvidia_cuda",
+        "effective_backend": "macos_metal",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
@@ -183,8 +184,8 @@
       "strategy": "recent_years"
     },
     "active": false,
-    "rows_before": 172200,
-    "rows_after": 172200
+    "rows_before": 74124,
+    "rows_after": 74124
   },
   "curated_municipalities": {
     "path": "resources/curated_municipalities_v1.json",
@@ -194,30 +195,30 @@
     "sha256": "a8140067558922bae3e96e3b5e56bce27d16ce0352dfdf1d35e58f11f45952be",
     "filter_report": {
       "municipality_column": "municipality_id",
-      "rows_before": 3197180,
-      "rows_after": 172200,
+      "rows_before": 1382778,
+      "rows_after": 74124,
       "districts_before": 5298,
-      "districts_after": 299
+      "districts_after": 284
     }
   },
   "reproducibility": {
     "effective_cli_args": {
       "model_config": "config/model_config.yaml",
-      "adapter_config": null,
+      "adapter_config": "projects/brazil_chik/config.yaml",
       "cv_config": "config/cv_config.yaml",
-      "raw_data": "data/raw/Epiclim_Final_data.csv",
+      "raw_data": "data/processed/brazil_chik_dataset_final.csv",
       "population_data": null,
-      "start_year": 2015,
-      "end_year": 2025,
+      "start_year": 2009,
+      "end_year": 2019,
       "selected_percentile": 75,
-      "skip_baselines": false,
-      "skip_bayesian": false,
-      "skip_visualizations": true,
+      "skip_baselines": true,
+      "skip_bayesian": true,
+      "skip_visualizations": false,
       "decision_cost": 0.2,
       "decision_loss": 1.0,
       "lead_time_max_lookback_steps": 8,
       "strict_bayesian_deps": false,
-      "strict_feature_gate": false,
+      "strict_feature_gate": true,
       "bayesian_draws": null,
       "bayesian_tune": null,
       "bayesian_chains": null,
@@ -232,14 +233,70 @@
       "log_level": "INFO",
       "seed": null
     },
-    "git_commit_sha": "a954b7a6dfbcd98fde95c809abe3333c6e665930",
-    "python_version": "3.10.17 | packaged by conda-forge | (main, Apr 10 2025, 22:19:12) [GCC 13.3.0]",
+    "git_commit_sha": "f2fa26a5d399ce0f223396aff66dff389c516d1d",
+    "python_version": "3.10.19 (main, Oct  9 2025, 15:25:03) [Clang 17.0.0 (clang-1700.6.3.2)]",
     "input_hashes_sha256": {
-      "raw_data": "8cc194b5cd9ad65e497fbc04a66a6e29aa50ba45a13583d950817bc28be0bbda",
-      "model_config": "422eb0f7b03e70071fb925d443f9420f1656c8b5420e4dfc238d0b39544f83ec",
-      "adapter_config": null,
+      "raw_data": "18ff66e4cc26782fdb9fda9dc5fc966482780e61453d03c817a89678bd8e90f2",
+      "model_config": "fca1c58b9ee18156d5a2d184ee5aca3a6d5c807231107045b265564cce46962c",
+      "adapter_config": "ead2f5bbd64aa4b7cdde5aa1c33bdb9e2ee391688ff6929abe0083db9f3c7dde",
       "cv_config": "d823a16af3792c192c8c7aaec2cd18ee5aaaca47935c5b84aeba073a1a3d0fa9",
       "curated_municipalities_contract": "a8140067558922bae3e96e3b5e56bce27d16ce0352dfdf1d35e58f11f45952be"
     }
+  },
+  "bayesian_covariates_effective": [
+    "month",
+    "year",
+    "weekofyear",
+    "rainfall",
+    "temperature",
+    "humidity",
+    "precip_tot_sum",
+    "temp_med_avg",
+    "umid_med_avg"
+  ],
+  "bayesian_covariates_requested": [
+    "month",
+    "year",
+    "weekofyear",
+    "rainfall",
+    "temperature",
+    "humidity",
+    "precip_tot_sum",
+    "temp_med_avg",
+    "umid_med_avg"
+  ],
+  "bayesian_covariate_selection": {
+    "requested_covariates": [
+      "month",
+      "year",
+      "weekofyear",
+      "rainfall",
+      "temperature",
+      "humidity",
+      "precip_tot_sum",
+      "temp_med_avg",
+      "umid_med_avg"
+    ],
+    "selected_covariates": [
+      "month",
+      "year",
+      "weekofyear",
+      "rainfall",
+      "temperature",
+      "humidity",
+      "precip_tot_sum",
+      "temp_med_avg",
+      "umid_med_avg"
+    ],
+    "excluded_covariates": [],
+    "missing_covariates": [],
+    "required_covariates": [
+      "month",
+      "year",
+      "weekofyear"
+    ],
+    "required_covariates_present": true,
+    "viable_count": 9,
+    "requested_count": 9
   }
 }
