@@ -5,6 +5,9 @@
 # ============================================================
 # A) Setup
 # ============================================================
+cd "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4"
+source .venv310/bin/activate
+
 # ============================================================
 # B) Quick integrity checks
 # ============================================================
@@ -14,6 +17,7 @@ python -m pytest -q tests/test_bayesian_model.py tests/test_pipeline_smoke.py te
 # C) Feature-stage pipeline only (fast, no model training)
 # ============================================================
 python run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2025 \
   --skip-baselines \
@@ -26,6 +30,7 @@ python run_pipeline.py \
 # D) Baseline-enabled run (Bayesian skipped)
 # ============================================================
 python run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2025 \
   --skip-bayesian \
@@ -37,6 +42,7 @@ python run_pipeline.py \
 # E) Full run (includes Bayesian)
 # ============================================================
 python run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2025 \
   --skip-visualizations \
@@ -47,6 +53,7 @@ python run_pipeline.py \
 # F) Dev Bayesian profile run (faster than full Bayesian)
 # ============================================================
 python run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2020 \
   --bayesian-profile-mode dev \
