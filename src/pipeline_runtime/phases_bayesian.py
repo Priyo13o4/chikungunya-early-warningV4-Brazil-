@@ -281,6 +281,7 @@ def collect_bayesian_oof_scores(
     cv_config: TimeSeriesCVConfig,
     threshold_series: pd.Series | None = None,
     fail_on_error: bool = False,
+    compute_backend_effective: str = "cpu",
     date_column: str = "date",
     target_column: str = "outbreak_label",
     generate_time_splits_fn: Callable[[pd.DataFrame, TimeSeriesCVConfig], Any] = generate_time_splits,
@@ -341,7 +342,11 @@ def collect_bayesian_oof_scores(
             fold_settings["climate_covariates"] = fold_selected_covariates
 
             model = HierarchicalBayesianModel(config=build_bayesian_config(strict_dependencies, fold_settings))
-            model.fit(fold_train_features, y_train_counts)
+            model.fit(
+                fold_train_features,
+                y_train_counts,
+                compute_backend_effective=compute_backend_effective,
+            )
             fold_threshold = threshold_series.loc[valid_idx] if threshold_series is not None else None
             fold_pred = model.predict_with_uncertainty(
                 fold_valid_features,
@@ -624,6 +629,8 @@ def run_bayesian_phase(
                 }
                 if "generate_time_splits_fn" in inspect.signature(collect_bayesian_oof_scores_fn).parameters:
                     bayes_oof_kwargs["generate_time_splits_fn"] = cv_split_callable
+                if "compute_backend_effective" in inspect.signature(collect_bayesian_oof_scores_fn).parameters:
+                    bayes_oof_kwargs["compute_backend_effective"] = bayesian_compute_backend_effective
                 bayesian_oof_subset = collect_bayesian_oof_scores_fn(**bayes_oof_kwargs)
                 bayesian_oof_score = pd.Series(np.nan, index=model_input_df.index, dtype="float64")
                 bayesian_oof_score.loc[bayesian_oof_subset.index] = bayesian_oof_subset.astype(float).to_numpy()

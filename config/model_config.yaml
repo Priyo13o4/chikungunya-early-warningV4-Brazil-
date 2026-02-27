@@ -16,7 +16,8 @@ baseline_models:
 bayesian_model:
   name: hierarchical_poisson
   climate_covariates:
-    - month
+    - month_sin
+    - month_cos
     - rainfall
     - temperature
     - humidity

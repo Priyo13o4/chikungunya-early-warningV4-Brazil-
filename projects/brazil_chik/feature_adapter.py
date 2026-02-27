@@ -293,6 +293,12 @@ def build_feature_matrix(
         if precip_column is not None:
             output["rainfall"] = pd.to_numeric(output[precip_column], errors="coerce")
 
+    rainfall_column = _resolve_column(output, ("rainfall",))
+    if rainfall_column is not None:
+        output[rainfall_column] = np.log1p(
+            pd.to_numeric(output[rainfall_column], errors="coerce").fillna(0.0).clip(lower=0.0)
+        )
+
     temperature_column = _resolve_column(output, ("temperature",))
     if temperature_column is None:
         temp_med_column = _resolve_column(output, ("temp_med_avg",))
@@ -353,6 +359,10 @@ def build_feature_matrix(
     output["year"] = output[date_column].dt.year.astype("Int64")
     output["month"] = output[date_column].dt.month.astype("Int64")
     output["weekofyear"] = output[date_column].dt.isocalendar().week.astype("Int64")
+    month_numeric = pd.to_numeric(output["month"], errors="coerce")
+    month_angle = (2.0 * np.pi * month_numeric) / 12.0
+    output["month_sin"] = np.sin(month_angle)
+    output["month_cos"] = np.cos(month_angle)
 
     # Neutral-value imputation for early history:
     # rows without sufficient lagged history are deterministically filled with 0.0

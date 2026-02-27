@@ -42,19 +42,50 @@ python run_pipeline.py \
   --log-level INFO
 
 # ============================================================
-# E) Full run (includes Bayesian)
+# E) Primary Linux VM / NVIDIA run (includes Bayesian, live logs)
 # ============================================================
-python run_pipeline.py \
+PYTHONUNBUFFERED=1 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2025 \
   --bayesian-progress \
   --skip-visualizations \
   --no-strict-feature-gate \
-  --log-level INFO
+  --log-level INFO \
+  2>&1 | tee logs.txt
 
 # ============================================================
-# F) Dev Bayesian profile run (faster than full Bayesian)
+# F) Full run with explicit Bayesian chain override (verify 4 chains)
+# ============================================================
+PYTHONUNBUFFERED=1 python run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
+  --start-year 2015 \
+  --end-year 2025 \
+  --bayesian-chains 4 \
+  --bayesian-progress \
+  --skip-visualizations \
+  --no-strict-feature-gate \
+  --log-level INFO \
+  2>&1 | tee logs_4chains.txt
+
+# ============================================================
+# G) Quick debug run with same profile for fullfit + OOF (profile routing explicit)
+# ============================================================
+# --bayesian-profile-mode final is supported and forces both fullfit and OOF to use 'final'.
+# Default behavior (no override) is fullfit=final and OOF=cv, so OOF can show fewer chains by design.
+PYTHONUNBUFFERED=1 python run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
+  --start-year 2019 \
+  --end-year 2020 \
+  --bayesian-profile-mode final \
+  --bayesian-progress \
+  --skip-visualizations \
+  --no-strict-feature-gate \
+  --log-level INFO \
+  2>&1 | tee logs_debug_profile_final.txt
+
+# ============================================================
+# H) Dev Bayesian profile run (faster than full Bayesian)
 # ============================================================
 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
@@ -67,7 +98,7 @@ python run_pipeline.py \
   --log-level INFO
 
 # ============================================================
-# G) Post-run contract checks
+# I) Post-run contract checks
 # ============================================================
 python - <<'PY'
 import json, yaml, csv
@@ -86,49 +117,3 @@ print('rm_req=', rm.get('bayesian_covariates_requested'))
 print('mf_req=', (mf.get('bayesian_covariates') or {}).get('requested'))
 print('rk_req=', rk.get('covariates_requested'))
 PY
-
-
-Here is your quick `tmux` cheat sheet, perfect for copying and pasting into your project notes!
-
-### The Essential `tmux` Commands
-
-* **Start a new session:**
-```bash
-tmux
-
-```
-
-
-*(Optional: Name it so it's easier to find by using `tmux new -s training`)*
-* **Enable Mouse Scrolling (The "Scroll Wheel" trick):**
-1. Press **`Ctrl + b`** and release both keys.
-2. Type **`:`** (Shift + semicolon). A yellow prompt will appear at the very bottom.
-3. Type `set -g mouse on` and press Enter.
-*(Now you can use your Mac's trackpad/scroll wheel to scroll up through all your training logs!)*
-
-
-* **Detach (Leave it running safely in the background):**
-1. Press **`Ctrl + b`** and release both keys.
-2. Press **`d`**
-*(You will see `[detached]` and can safely close VS Code or sleep your Mac).*
-
-
-* **Reattach (Come back to your running code):**
-```bash
-tmux attach
-
-```
-
-
-*(If you named it earlier, use `tmux attach -t training`)*
-* **List your running sessions (If you forget what's running):**
-```bash
-tmux ls
-
-```
-
-
-* **Kill the session entirely:**
-When your script is completely finished and you want to close the `tmux` window for good, just type `exit` in the terminal and press Enter.
-
-Would you like me to give you the command to open a split-pane in `tmux` so you can watch your `nvidia-smi` GPU stats on one half of the screen and your Python script on the other?
