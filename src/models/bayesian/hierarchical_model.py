@@ -628,6 +628,7 @@ class HierarchicalBayesianModel:
                 "target_accept": self.config.target_accept,
                 "random_seed": self.config.random_seed,
                 "progressbar": self.config.bayesian_progress,
+                "chain_method": "vectorized",  # Run multiple chains in parallel on a single GPU
                 "nuts_kwargs": {"max_tree_depth": self.config.max_treedepth},
                 "idata_kwargs": {"log_likelihood": False},
             }

@@ -6,7 +6,7 @@
 # A) Setup
 # ============================================================
 cd "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4"
-source .venv310/bin/activate
+source .venv/bin/activate
 
 # Optional: force unbuffered Python output so progress bars/logs stream live
 export PYTHONUNBUFFERED=1

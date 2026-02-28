@@ -85,7 +85,7 @@ secrets/
 data.zip
 
 # Run-generated artifacts (safe to ignore)
-outputs/metrics/
+
 outputs/reports/*.log
 outputs/figures/
 outputs/reports/fold_ledger.json

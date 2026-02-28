@@ -2,6 +2,33 @@
 
 from __future__ import annotations
 
+import os
+import site
+import sys
+
+# --- JAX GPU Path Fix ---
+# Dynamically inject pip-installed NVIDIA library paths into LD_LIBRARY_PATH
+# This must happen before any JAX or PyMC imports so that XLA can find cuSPARSE, cuDNN, etc.
+try:
+    site_packages = site.getsitepackages()[0]
+    nvidia_dir = os.path.join(site_packages, 'nvidia')
+    if os.path.exists(nvidia_dir):
+        nvidia_libs = [
+            os.path.join(nvidia_dir, d, 'lib')
+            for d in os.listdir(nvidia_dir)
+            if os.path.isdir(os.path.join(nvidia_dir, d, 'lib'))
+        ]
+        if nvidia_libs:
+            new_ld_path = ':'.join(nvidia_libs)
+            current_ld_path = os.environ.get('LD_LIBRARY_PATH', '')
+            os.environ['LD_LIBRARY_PATH'] = f"{new_ld_path}:{current_ld_path}" if current_ld_path else new_ld_path
+            
+    # Force JAX to only look for CUDA and CPU, suppressing the TPU warning
+    os.environ['JAX_PLATFORMS'] = 'cuda,cpu'
+except Exception as e:
+    print(f"Warning: Failed to inject NVIDIA library paths: {e}")
+# ------------------------
+
 import argparse
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -1020,6 +1047,7 @@ def _collect_bayesian_oof_scores(
     date_column: str = "date",
     target_column: str = "outbreak_label",
     generate_time_splits_fn: Callable[[pd.DataFrame, TimeSeriesCVConfig], Any] = generate_time_splits,
+    compute_backend_effective: str = "cpu",
 ) -> pd.Series:
     from src.models.bayesian.hierarchical_model import HierarchicalBayesianModel
 
@@ -1077,7 +1105,7 @@ def _collect_bayesian_oof_scores(
             fold_settings["climate_covariates"] = fold_selected_covariates
 
             model = HierarchicalBayesianModel(config=_build_bayesian_config(strict_dependencies, fold_settings))
-            model.fit(fold_train_features, y_train_counts)
+            model.fit(fold_train_features, y_train_counts, compute_backend_effective=compute_backend_effective)
             fold_threshold = threshold_series.loc[valid_idx] if threshold_series is not None else None
             fold_pred = model.predict_with_uncertainty(
                 fold_valid_features,

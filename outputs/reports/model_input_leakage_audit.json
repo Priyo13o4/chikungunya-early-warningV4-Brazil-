@@ -1,6 +1,6 @@
 {
-  "input_feature_count": 40,
-  "output_feature_count": 40,
+  "input_feature_count": 42,
+  "output_feature_count": 42,
   "dropped_forbidden_columns": [],
   "forbidden_patterns": [
     "^outbreak_label$",
