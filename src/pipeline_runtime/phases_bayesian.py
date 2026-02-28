@@ -30,6 +30,103 @@ _BAYESIAN_OOF_HARD_FAIL_MARKERS: tuple[str, ...] = (
 _SUPPORTED_OOF_EXECUTION_MODES: set[str] = {"legacy", "simplified", "conditional"}
 
 
+def evaluate_strict_convergence_with_groups(
+    convergence: dict[str, Any],
+    grouped_diagnostics: pd.DataFrame,
+    *,
+    temporal_fail_fraction_threshold: float,
+) -> tuple[bool, dict[str, Any]]:
+    strict_fail_reasons: list[str] = []
+    core_ess_fail_groups: list[str] = []
+
+    divergence_value = float(convergence.get("divergences", 0.0))
+    divergence_threshold = float(convergence.get("divergence_threshold", 0.0))
+    max_tree_depth_value = float(convergence.get("max_tree_depth", 0.0))
+    max_tree_depth_threshold = float(convergence.get("max_tree_depth_threshold", 12.0))
+    rhat_value = float(convergence.get("r_hat_max", 1.0))
+    rhat_threshold = float(convergence.get("rhat_threshold", 1.05))
+    ess_threshold = float(convergence.get("ess_threshold", 200.0))
+
+    hard_fail_global = bool(
+        divergence_value > divergence_threshold
+        or max_tree_depth_value > max_tree_depth_threshold
+        or rhat_value > rhat_threshold
+    )
+    if divergence_value > divergence_threshold:
+        strict_fail_reasons.append("global_divergences")
+    if max_tree_depth_value > max_tree_depth_threshold:
+        strict_fail_reasons.append("global_max_tree_depth")
+    if rhat_value > rhat_threshold:
+        strict_fail_reasons.append("global_rhat")
+
+    grouped_frame = grouped_diagnostics if isinstance(grouped_diagnostics, pd.DataFrame) else pd.DataFrame()
+
+    def _group_row(group_name: str) -> pd.Series | None:
+        if grouped_frame.empty or "group" not in grouped_frame.columns:
+            return None
+        subset = grouped_frame.loc[grouped_frame["group"] == group_name]
+        if subset.empty:
+            return None
+        return subset.iloc[0]
+
+    def _safe_int(row: pd.Series | None, key: str) -> int:
+        if row is None:
+            return 0
+        value = row.get(key, 0)
+        if pd.isna(value):
+            return 0
+        return int(value)
+
+    def _safe_float(row: pd.Series | None, key: str) -> float:
+        if row is None:
+            return float("nan")
+        value = row.get(key, float("nan"))
+        if pd.isna(value):
+            return float("nan")
+        return float(value)
+
+    for group_name in ("random_effects", "fixed_effects", "likelihood"):
+        row = _group_row(group_name)
+        n_parameters = _safe_int(row, "n_parameters")
+        if row is None or n_parameters <= 0:
+            strict_fail_reasons.append(f"missing_core_group:{group_name}")
+            continue
+        ess_min = _safe_float(row, "ess_min")
+        if not np.isnan(ess_min) and ess_min < ess_threshold:
+            core_ess_fail_groups.append(group_name)
+            strict_fail_reasons.append(f"core_ess_fail:{group_name}")
+
+    temporal_fail_fraction: float | None = None
+    temporal_row = _group_row("temporal_state")
+    temporal_n_parameters = _safe_int(temporal_row, "n_parameters")
+    if temporal_n_parameters > 0:
+        temporal_fail_count = _safe_int(temporal_row, "fail_ess_count")
+        temporal_fail_fraction = float(temporal_fail_count / max(temporal_n_parameters, 1))
+        if temporal_fail_fraction > float(temporal_fail_fraction_threshold):
+            strict_fail_reasons.append("temporal_state_ess_fail_fraction")
+
+    other_fail_fraction: float | None = None
+    other_row = _group_row("other")
+    other_n_parameters = _safe_int(other_row, "n_parameters")
+    if other_n_parameters > 0:
+        other_fail_count = _safe_int(other_row, "fail_ess_count")
+        other_fail_fraction = float(other_fail_count / max(other_n_parameters, 1))
+        if other_fail_fraction > 0.5:
+            strict_fail_reasons.append("other_ess_fail_fraction")
+
+    strict_converged = not bool(hard_fail_global or strict_fail_reasons)
+    details = {
+        "strict_policy": "group_aware_v1",
+        "hard_fail_global": bool(hard_fail_global),
+        "core_ess_fail_groups": core_ess_fail_groups,
+        "temporal_fail_fraction": temporal_fail_fraction,
+        "temporal_fail_fraction_threshold": float(temporal_fail_fraction_threshold),
+        "other_fail_fraction": other_fail_fraction,
+        "strict_fail_reasons": strict_fail_reasons,
+    }
+    return strict_converged, details
+
+
 def _build_bayesian_backend_metadata(*, requested_backend: str, resolved_backend: str) -> dict[str, Any]:
     requested = str(requested_backend or "cpu")
     resolved = str(resolved_backend or "cpu")
@@ -770,6 +867,23 @@ def run_bayesian_phase(
                     rhat_threshold=float(bayesian_settings_fullfit.get("rhat_warn_threshold", 1.05)),
                     ess_threshold=float(bayesian_settings_fullfit.get("ess_warn_threshold", 200.0)),
                 )
+                raw_temporal_fail_fraction_threshold = bayesian_settings_fullfit.get(
+                    "grouped_temporal_ess_fail_fraction_threshold",
+                    0.20,
+                )
+                try:
+                    temporal_fail_fraction_threshold = float(raw_temporal_fail_fraction_threshold)
+                except (TypeError, ValueError):
+                    LOGGER.warning(
+                        "Invalid grouped_temporal_ess_fail_fraction_threshold '%s'; defaulting to 0.20",
+                        raw_temporal_fail_fraction_threshold,
+                    )
+                    temporal_fail_fraction_threshold = 0.20
+                strict_converged, strict_details = evaluate_strict_convergence_with_groups(
+                    convergence,
+                    grouped_diagnostics_frame,
+                    temporal_fail_fraction_threshold=temporal_fail_fraction_threshold,
+                )
                 grouped_diagnostics_path = bayesian_diag_dir / "rhat_ess_grouped.csv"
                 grouped_diagnostics_frame.to_csv(grouped_diagnostics_path, index=False)
                 state.artifacts["bayesian_rhat_ess_grouped"] = grouped_diagnostics_path
@@ -831,12 +945,22 @@ def run_bayesian_phase(
                             "compute_backend_fallback_reason"
                         ),
                         "grouped_diagnostics": grouped_records,
+                        "strict_converged": bool(strict_converged),
+                        "strict_policy": str(strict_details.get("strict_policy", "group_aware_v1")),
+                        "strict_fail_reasons": list(strict_details.get("strict_fail_reasons", [])),
+                        "core_ess_fail_groups": list(strict_details.get("core_ess_fail_groups", [])),
+                        "temporal_fail_fraction": strict_details.get("temporal_fail_fraction"),
+                        "temporal_fail_fraction_threshold": float(
+                            strict_details.get("temporal_fail_fraction_threshold", temporal_fail_fraction_threshold)
+                        ),
+                        "other_fail_fraction": strict_details.get("other_fail_fraction"),
                     }
                 )
-                convergence_log_fn = LOGGER.info if bool(convergence.get("converged", False)) else LOGGER.warning
+                convergence_log_fn = LOGGER.info if bool(convergence.get("strict_converged", True)) else LOGGER.warning
                 convergence_log_fn(
-                    "Bayesian convergence summary: converged=%s mode=%s divergences=%.0f r_hat_max=%.4f ess_min=%.1f grouped_fails(rhat=%d,ess=%d)",
+                    "Bayesian convergence summary: converged=%s strict_converged=%s mode=%s divergences=%.0f r_hat_max=%.4f ess_min=%.1f grouped_fails(rhat=%d,ess=%d)",
                     bool(convergence.get("converged", False)),
+                    bool(convergence.get("strict_converged", False)),
                     str(convergence.get("mode_used", "unknown")),
                     float(convergence.get("divergences", 0.0)),
                     float(convergence.get("r_hat_max", 1.0)),
@@ -864,13 +988,13 @@ def run_bayesian_phase(
                 safe_write_json_fn(mode_artifact, bayesian_diag_dir / "mode.json")
                 state.artifacts["bayesian_mode"] = bayesian_diag_dir / "mode.json"
 
-                if not convergence.get("converged", False):
+                if not bool(convergence.get("strict_converged", False)):
                     bayesian_converged = False
                     state.degraded_reasons.append(
                         {
                             "code": "bayesian_convergence_failed",
                             "mode_used": str(convergence.get("mode_used", "unknown")),
-                            "reason": "convergence_not_met",
+                            "reason": "strict_convergence_not_met",
                         }
                     )
                     if convergence_failure_mode == "strict":
@@ -884,12 +1008,16 @@ def run_bayesian_phase(
                     safe_write_json_fn(bayesian_metrics, paths.outputs_metrics / "bayesian_metrics.json")
                     state.artifacts["bayesian_metrics"] = paths.outputs_metrics / "bayesian_metrics.json"
                     LOGGER.warning(
-                        "Bayesian convergence failure handled in '%s' mode: divergences=%.0f, max_tree_depth=%.0f, r_hat_max=%.4f, ess_min=%.1f",
+                        "Bayesian strict convergence failure handled in '%s' mode: strict_converged=%s, converged=%s, divergences=%.0f, max_tree_depth=%.0f, r_hat_max=%.4f, ess_min=%.1f, core_ess_fail_groups=%s, strict_fail_reasons=%s",
                         convergence_failure_mode,
+                        bool(convergence.get("strict_converged", False)),
+                        bool(convergence.get("converged", False)),
                         convergence["divergences"],
                         convergence["max_tree_depth"],
                         convergence["r_hat_max"],
                         convergence["ess_min"],
+                        convergence.get("core_ess_fail_groups", []),
+                        convergence.get("strict_fail_reasons", []),
                     )
                 else:
                     bayesian_converged = True

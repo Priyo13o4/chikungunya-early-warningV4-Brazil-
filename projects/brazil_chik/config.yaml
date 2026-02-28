@@ -12,3 +12,4 @@ bayesian_model:
   max_convergence_retries: 0
   oof_execution_mode: conditional
   convergence_failure_mode: strict
+  grouped_temporal_ess_fail_fraction_threshold: 0.20
