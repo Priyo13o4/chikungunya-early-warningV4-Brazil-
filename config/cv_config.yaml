@@ -8,6 +8,7 @@ first_valid_year: 2016
 last_valid_year: 2020
 start_train_year: 2015
 thesis_strict: true
-train_window_years: 5
+thesis_strict_mode: rolling
+train_window_years: 4
 skip_single_class_folds: true
 minimum_evaluated_folds: 3

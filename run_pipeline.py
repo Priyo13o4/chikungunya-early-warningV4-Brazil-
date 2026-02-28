@@ -848,7 +848,8 @@ def parse_args() -> argparse.Namespace:
 
 def _safe_write_json(data: dict[str, Any], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    payload = runtime_artifacts.json_compatible(data)
+    output_path.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
 
 
 def _run_bayesian_track(

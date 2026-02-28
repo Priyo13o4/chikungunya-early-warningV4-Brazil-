@@ -35,6 +35,10 @@ bayesian_model:
   # convergence_failure_mode: strict
   bayesian_simplified_mode: false
   max_convergence_retries: 1
+  oof_execution_mode: conditional
+  oof_conditional_rhat_threshold: 1.05
+  oof_conditional_ess_threshold: 200.0
+  oof_conditional_divergence_threshold: 25
   divergence_warn_threshold: 25
   rhat_warn_threshold: 1.05
   ess_warn_threshold: 200.0
@@ -44,11 +48,11 @@ bayesian_model:
 
 bayesian_model_profiles:
   cv:
-    chains: 2
-    tune: 1500
-    draws: 1500
-    target_accept: 0.90
-    max_treedepth: 10
+    chains: 4
+    tune: 2500
+    draws: 2000
+    target_accept: 0.95
+    max_treedepth: 12
     bayesian_progress: false
   final:
     chains: 4

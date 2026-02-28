@@ -1,24 +1,9 @@
-# Chikungunya EWS - Run Commands (current validated set)
-# Workspace root:
-# /Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4
-
-# ============================================================
-# A) Setup
-# ============================================================
 cd "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4"
 source .venv/bin/activate
-
-# Optional: force unbuffered Python output so progress bars/logs stream live
 export PYTHONUNBUFFERED=1
 
-# ============================================================
-# B) Quick integrity checks
-# ============================================================
 python -m pytest -q tests/test_bayesian_model.py tests/test_pipeline_smoke.py tests/test_metrics_integrity.py
 
-# ============================================================
-# C) Feature-stage pipeline only (fast, no model training)
-# ============================================================
 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
@@ -29,9 +14,6 @@ python run_pipeline.py \
   --no-strict-feature-gate \
   --log-level INFO
 
-# ============================================================
-# D) Baseline-enabled run (Bayesian skipped)
-# ============================================================
 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
@@ -41,9 +23,6 @@ python run_pipeline.py \
   --no-strict-feature-gate \
   --log-level INFO
 
-# ============================================================
-# E) Primary Linux VM / NVIDIA run (includes Bayesian, live logs)
-# ============================================================
 PYTHONUNBUFFERED=1 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
@@ -54,9 +33,9 @@ PYTHONUNBUFFERED=1 python run_pipeline.py \
   --log-level INFO \
   2>&1 | tee logs.txt
 
-# ============================================================
-# F) Full run with explicit Bayesian chain override (verify 4 chains)
-# ============================================================
+tmux new -d -s chik_gpu "cd '/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4' && source .venv/bin/activate && PYTHONUNBUFFERED=1 python run_pipeline.py --adapter-config projects/brazil_chik/config.yaml --start-year 2015 --end-year 2025 --bayesian-progress --skip-visualizations --no-strict-feature-gate --log-level INFO 2>&1 | tee logs_tmux.txt"
+tmux attach -t chik_gpu
+
 PYTHONUNBUFFERED=1 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
@@ -68,11 +47,6 @@ PYTHONUNBUFFERED=1 python run_pipeline.py \
   --log-level INFO \
   2>&1 | tee logs_4chains.txt
 
-# ============================================================
-# G) Quick debug run with same profile for fullfit + OOF (profile routing explicit)
-# ============================================================
-# --bayesian-profile-mode final is supported and forces both fullfit and OOF to use 'final'.
-# Default behavior (no override) is fullfit=final and OOF=cv, so OOF can show fewer chains by design.
 PYTHONUNBUFFERED=1 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2019 \
@@ -84,9 +58,6 @@ PYTHONUNBUFFERED=1 python run_pipeline.py \
   --log-level INFO \
   2>&1 | tee logs_debug_profile_final.txt
 
-# ============================================================
-# H) Dev Bayesian profile run (faster than full Bayesian)
-# ============================================================
 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
@@ -97,9 +68,6 @@ python run_pipeline.py \
   --no-strict-feature-gate \
   --log-level INFO
 
-# ============================================================
-# I) Post-run contract checks
-# ============================================================
 python - <<'PY'
 import json, yaml, csv
 from pathlib import Path

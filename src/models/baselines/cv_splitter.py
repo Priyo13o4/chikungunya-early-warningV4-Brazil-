@@ -32,6 +32,7 @@ class TimeSeriesCVConfig:
     last_valid_year: int = 2019
     train_window_years: int = 5
     thesis_strict: bool = False
+    thesis_strict_mode: str = "expanding"
     skip_single_class_folds: bool = True
     minimum_evaluated_folds: int = 1
     min_outbreak_count_per_fold: int = 1
@@ -152,8 +153,15 @@ def build_fold_ledger(df: pd.DataFrame, config: TimeSeriesCVConfig) -> list[dict
         return ledger
 
     years = _resolve_year_series(df, config.date_column)
+    thesis_mode = str(getattr(config, "thesis_strict_mode", "expanding")).strip().lower()
     for valid_year in range(config.first_valid_year, config.last_valid_year + 1):
-        train_start = valid_year - config.train_window_years
+        if bool(config.thesis_strict):
+            if thesis_mode == "rolling":
+                train_start = max(int(config.start_train_year), valid_year - int(config.train_window_years))
+            else:
+                train_start = int(config.start_train_year)
+        else:
+            train_start = valid_year - int(config.train_window_years)
         train_end = valid_year - 1
 
         train_mask = years.between(train_start, train_end, inclusive="both")

@@ -10,4 +10,5 @@ bayesian_model:
   force_full_bayesian: false
   bayesian_simplified_mode: false
   max_convergence_retries: 0
+  oof_execution_mode: conditional
   convergence_failure_mode: strict

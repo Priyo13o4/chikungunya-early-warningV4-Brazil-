@@ -593,9 +593,9 @@ class HierarchicalBayesianModel:
                 z_t_values = np.zeros(len(times), dtype=float)
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
-                rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.8)
-                rho = pm.Deterministic("rho", 0.95 * pm.math.tanh(rho_raw))
-                sigma_z = pm.HalfNormal("sigma_z", sigma=0.35)
+                rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.45)
+                rho = pm.Deterministic("rho", 0.90 * pm.math.tanh(rho_raw))
+                sigma_z = pm.HalfNormal("sigma_z", sigma=0.25)
                 z_t = pm.AR(
                     "z_t",
                     rho=rho,
@@ -607,11 +607,15 @@ class HierarchicalBayesianModel:
                 z_t_values = np.full(len(times), np.nan, dtype=float)
 
             mu = pm.math.exp(pm.math.clip(linear, -10.0, 10.0))
-            alpha_nb = pm.Exponential("alpha_nb", lam=1.0)
+            alpha_nb = pm.LogNormal("alpha_nb", mu=0.0, sigma=0.5)
             pm.NegativeBinomial("cases_obs", mu=mu, alpha=alpha_nb, observed=observed, dims="obs")
 
             LOGGER.info(
-                "Starting Bayesian JAX sampling: chains=%d, draws=%d, tune=%d, target_accept=%.3f, max_treedepth=%d, simplified_mode=%s, progressbar=%s",
+                "Starting Bayesian JAX sampling: obs=%d, districts=%d, times=%d, n_covariates=%d, chains=%d, draws=%d, tune=%d, target_accept=%.3f, max_treedepth=%d, simplified_mode=%s, progressbar=%s",
+                int(len(observed)),
+                int(len(districts)),
+                int(len(times)),
+                int(feature_matrix_scaled.shape[1]),
                 int(self.config.chains),
                 int(self.config.draws),
                 int(self.config.tune),
@@ -687,9 +691,9 @@ class HierarchicalBayesianModel:
                 z_t_values = np.zeros(len(times), dtype=float)
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
-                rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.8)
-                rho = pm.Deterministic("rho", 0.95 * pm.math.tanh(rho_raw))
-                sigma_z = pm.HalfNormal("sigma_z", sigma=0.35)
+                rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.45)
+                rho = pm.Deterministic("rho", 0.90 * pm.math.tanh(rho_raw))
+                sigma_z = pm.HalfNormal("sigma_z", sigma=0.25)
                 z_t = pm.AR(
                     "z_t",
                     rho=rho,
@@ -701,11 +705,15 @@ class HierarchicalBayesianModel:
                 z_t_values = np.full(len(times), np.nan, dtype=float)
 
             mu = pm.math.exp(pm.math.clip(linear, -10.0, 10.0))
-            alpha_nb = pm.Exponential("alpha_nb", lam=1.0)
+            alpha_nb = pm.LogNormal("alpha_nb", mu=0.0, sigma=0.5)
             pm.NegativeBinomial("cases_obs", mu=mu, alpha=alpha_nb, observed=observed, dims="obs")
 
             LOGGER.info(
-                "Starting Bayesian sampling: chains=%d, draws=%d, tune=%d, target_accept=%.3f, max_treedepth=%d, simplified_mode=%s, progressbar=%s",
+                "Starting Bayesian sampling: obs=%d, districts=%d, times=%d, n_covariates=%d, chains=%d, draws=%d, tune=%d, target_accept=%.3f, max_treedepth=%d, simplified_mode=%s, progressbar=%s",
+                int(len(observed)),
+                int(len(districts)),
+                int(len(times)),
+                int(feature_matrix_scaled.shape[1]),
                 int(self.config.chains),
                 int(self.config.draws),
                 int(self.config.tune),
@@ -1004,7 +1012,9 @@ class HierarchicalBayesianModel:
 
         if self._needs_simplification(diagnostics_summary):
             LOGGER.warning(
-                "Bayesian fit completed with convergence concerns: divergences=%.0f, max_tree_depth=%.0f, r_hat_max=%.4f, ess_min=%.1f",
+                "Bayesian fit completed with convergence concerns: backend=%s, simplified_mode=%s, divergences=%.0f, max_tree_depth=%.0f, r_hat_max=%.4f, ess_min=%.1f",
+                self.sampling_backend_effective_,
+                bool(simplified_mode),
                 diagnostics_summary.get("divergences", float("nan")),
                 diagnostics_summary.get("max_tree_depth", float("nan")),
                 diagnostics_summary.get("r_hat_max", float("nan")),

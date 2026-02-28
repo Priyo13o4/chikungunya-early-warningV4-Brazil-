@@ -441,6 +441,19 @@ def resolve_cv_config(
 ) -> tuple[TimeSeriesCVConfig, dict[str, Any]]:
     raw_cv_config = load_yaml_config(cv_config_path)
 
+    def _as_bool(raw_value: Any, default: bool) -> bool:
+        if raw_value is None:
+            return bool(default)
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, str):
+            normalized = raw_value.strip().lower()
+            if normalized in {"1", "true", "yes", "y", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "n", "off"}:
+                return False
+        return bool(raw_value)
+
     first_valid_year = int(raw_cv_config.get("first_valid_year", 0) or 0)
     last_valid_year = int(raw_cv_config.get("last_valid_year", 0) or 0)
     n_splits = int(raw_cv_config.get("n_splits", 0) or 0)
@@ -457,15 +470,16 @@ def resolve_cv_config(
         first_valid_year=int(first_valid_year),
         last_valid_year=int(last_valid_year),
         train_window_years=int(raw_cv_config.get("train_window_years", 5)),
-        thesis_strict=bool(raw_cv_config.get("thesis_strict", False)),
-        skip_single_class_folds=bool(raw_cv_config.get("skip_single_class_folds", True)),
+        thesis_strict=_as_bool(raw_cv_config.get("thesis_strict", False), False),
+        thesis_strict_mode=str(raw_cv_config.get("thesis_strict_mode", "expanding")),
+        skip_single_class_folds=_as_bool(raw_cv_config.get("skip_single_class_folds", True), True),
         minimum_evaluated_folds=int(raw_cv_config.get("minimum_evaluated_folds", max(1, min(3, n_splits or 5)))),
         min_outbreak_count_per_fold=int(raw_cv_config.get("min_outbreak_count_per_fold", 1)),
         min_class_ratio_per_fold=float(raw_cv_config.get("min_class_ratio_per_fold", 0.0)),
         max_class_ratio_per_fold=float(raw_cv_config.get("max_class_ratio_per_fold", 1.0)),
         min_municipality_count_per_fold=int(raw_cv_config.get("min_municipality_count_per_fold", 1)),
         min_train_span_years=int(raw_cv_config.get("min_train_span_years", 1)),
-        fail_on_gate_violation=bool(raw_cv_config.get("fail_on_gate_violation", True)),
+        fail_on_gate_violation=_as_bool(raw_cv_config.get("fail_on_gate_violation", True), True),
     )
     effective = {
         **raw_cv_config,

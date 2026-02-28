@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,8 @@ _CONTRACT_METRIC_FILES: tuple[str, ...] = (
 
 def safe_write_json(data: dict[str, Any], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    payload = json_compatible(data)
+    output_path.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
 
 
 def clear_headline_artifacts(metrics_dir: Path) -> None:
@@ -89,6 +91,8 @@ def git_commit_sha(project_root: Path) -> str | None:
 def json_compatible(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, dict):
         return {str(k): json_compatible(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

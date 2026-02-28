@@ -19,6 +19,7 @@ class TimeSeriesCVConfig:
     last_valid_year: int = 2020
     train_window_years: int = 5
     thesis_strict: bool = False
+    thesis_strict_mode: str = "expanding"
     skip_single_class_folds: bool = True
     minimum_evaluated_folds: int = 1
     min_outbreak_count_per_fold: int = 1
@@ -55,6 +56,18 @@ def _cfg_float(config: Any, key: str, default: float) -> float:
 def _fold_plan(config: Any) -> tuple[str, list[tuple[int, int, int]]]:
     thesis_strict = _cfg_bool(config, "thesis_strict", False)
     if thesis_strict:
+        mode = str(getattr(config, "thesis_strict_mode", "expanding")).strip().lower()
+        if mode == "rolling":
+            start_train_year = _cfg_int(config, "start_train_year", 2015)
+            train_window_years = max(1, _cfg_int(config, "train_window_years", 5))
+            first_valid_year = _cfg_int(config, "first_valid_year", 2016)
+            last_valid_year = _cfg_int(config, "last_valid_year", 2020)
+            plan = [
+                (max(start_train_year, valid_year - train_window_years), valid_year - 1, valid_year)
+                for valid_year in range(first_valid_year, last_valid_year + 1)
+            ]
+            return "thesis_strict", plan
+
         plan = [(2015, valid_year - 1, valid_year) for valid_year in range(2016, 2021)]
         return "thesis_strict", plan
 
@@ -152,6 +165,7 @@ def build_fold_ledger(df: pd.DataFrame, config: TimeSeriesCVConfig) -> list[dict
     years = _resolve_year_series(df, config.date_column)
     ledger: list[dict[str, Any]] = []
     fold_mode, plan = _fold_plan(config)
+    strict_submode = str(getattr(config, "thesis_strict_mode", "expanding")).strip().lower()
 
     LOGGER.info(
         "Brazil CV fold mode=%s thesis_strict=%s folds=%d",
@@ -201,6 +215,7 @@ def build_fold_ledger(df: pd.DataFrame, config: TimeSeriesCVConfig) -> list[dict
         ledger.append(
             {
                 "fold_mode": fold_mode,
+                "thesis_strict_mode": strict_submode if _cfg_bool(config, "thesis_strict", False) else "range",
                 "thesis_strict": _cfg_bool(config, "thesis_strict", False),
                 "valid_year": int(valid_year),
                 "train_start_year": int(train_start),

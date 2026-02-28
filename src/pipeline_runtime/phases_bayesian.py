@@ -9,6 +9,7 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
+from src.models.bayesian.diagnostics import summarize_diagnostics_by_group
 from src.models.baselines.cv_splitter import TimeSeriesCVConfig, generate_time_splits
 from src.pipeline_runtime.config_runtime import (
     build_bayesian_config,
@@ -26,6 +27,7 @@ _BAYESIAN_OOF_HARD_FAIL_MARKERS: tuple[str, ...] = (
     "missing required climate covariates",
     "pipeline must provide the configured bayesian covariate set explicitly",
 )
+_SUPPORTED_OOF_EXECUTION_MODES: set[str] = {"legacy", "simplified", "conditional"}
 
 
 def _build_bayesian_backend_metadata(*, requested_backend: str, resolved_backend: str) -> dict[str, Any]:
@@ -400,6 +402,8 @@ def run_bayesian_phase(
     safe_write_json_fn: Callable[[dict[str, Any], Path], None],
 ) -> BayesianPhaseResult:
     LOGGER.info("Phase: bayesian")
+    bayesian_settings_fullfit = dict(bayesian_settings_fullfit) if isinstance(bayesian_settings_fullfit, dict) else {}
+    bayesian_settings_cv = dict(bayesian_settings_cv) if isinstance(bayesian_settings_cv, dict) else {}
     bayesian_score: pd.Series | None = None
     bayesian_risk_frame: pd.DataFrame | None = None
     bayesian_oof_score: pd.Series | None = None
@@ -424,6 +428,11 @@ def run_bayesian_phase(
         "mode_used": "not_run" if skip_bayesian else "pending",
         "degraded_mode": False,
         "fallback_used": False,
+        "oof_execution_mode_requested": str(
+            bayesian_settings_cv.get("oof_execution_mode", bayesian_settings_fullfit.get("oof_execution_mode", "conditional"))
+        ),
+        "oof_execution_mode_effective": "not_run" if skip_bayesian else "pending",
+        "oof_simplified_reason": None,
     }
     bayesian_metrics: dict[str, float] | None = None
     bayesian_metrics_fullfit: dict[str, float] | None = None
@@ -617,6 +626,98 @@ def run_bayesian_phase(
             state.artifacts["bayesian_metrics_fullfit"] = paths.outputs_metrics / "bayesian_metrics_fullfit.json"
 
             if not bool(bayesian_sampling_diagnostics.get("degraded_mode", False)):
+                requested_oof_mode_raw = bayesian_settings_cv.get(
+                    "oof_execution_mode",
+                    bayesian_settings_fullfit.get("oof_execution_mode", "conditional"),
+                )
+                requested_oof_mode = str(requested_oof_mode_raw).strip().lower()
+                if requested_oof_mode not in _SUPPORTED_OOF_EXECUTION_MODES:
+                    LOGGER.warning(
+                        "Invalid bayesian_model.oof_execution_mode '%s'; defaulting to 'conditional'",
+                        requested_oof_mode_raw,
+                    )
+                    requested_oof_mode = "conditional"
+
+                effective_simplified = bool(bayesian_settings_cv.get("bayesian_simplified_mode", False)) if requested_oof_mode == "legacy" else False
+                oof_simplified_reason: str | None = None
+
+                if requested_oof_mode == "simplified":
+                    effective_simplified = True
+                    oof_simplified_reason = "requested_simplified"
+                elif requested_oof_mode == "conditional" and bayesian_idata is not None:
+                    conditional_rhat_threshold = float(
+                        bayesian_settings_cv.get(
+                            "oof_conditional_rhat_threshold",
+                            bayesian_settings_fullfit.get("oof_conditional_rhat_threshold", 1.05),
+                        )
+                    )
+                    conditional_ess_threshold = float(
+                        bayesian_settings_cv.get(
+                            "oof_conditional_ess_threshold",
+                            bayesian_settings_fullfit.get("oof_conditional_ess_threshold", 200.0),
+                        )
+                    )
+                    conditional_divergence_threshold = float(
+                        bayesian_settings_cv.get(
+                            "oof_conditional_divergence_threshold",
+                            bayesian_settings_fullfit.get("oof_conditional_divergence_threshold", 25),
+                        )
+                    )
+
+                    fullfit_snapshot = check_convergence_fn(
+                        bayesian_idata,
+                        divergence_threshold=conditional_divergence_threshold,
+                        rhat_threshold=conditional_rhat_threshold,
+                        ess_threshold=conditional_ess_threshold,
+                        max_tree_depth_threshold=float(bayesian_settings_fullfit.get("max_treedepth", 12)),
+                    )
+                    non_converged = not bool(fullfit_snapshot.get("converged", False))
+                    rhat_risk = float(fullfit_snapshot.get("r_hat_max", 0.0)) > conditional_rhat_threshold
+                    ess_risk = float(fullfit_snapshot.get("ess_min", float("inf"))) < conditional_ess_threshold
+                    divergence_risk = float(fullfit_snapshot.get("divergences", 0.0)) > conditional_divergence_threshold
+
+                    if non_converged or rhat_risk or ess_risk or divergence_risk:
+                        effective_simplified = True
+                        risk_flags: list[str] = []
+                        if non_converged:
+                            risk_flags.append("non_converged")
+                        if rhat_risk:
+                            risk_flags.append("rhat")
+                        if ess_risk:
+                            risk_flags.append("ess")
+                        if divergence_risk:
+                            risk_flags.append("divergences")
+                        oof_simplified_reason = f"conditional_fullfit_risk:{'|'.join(risk_flags)}"
+
+                if effective_simplified:
+                    bayesian_settings_cv["bayesian_simplified_mode"] = True
+                    bayesian_settings_cv["max_convergence_retries"] = 0
+                    effective_oof_mode = "simplified"
+                else:
+                    bayesian_settings_cv["bayesian_simplified_mode"] = False
+                    if requested_oof_mode in {"legacy", "conditional"}:
+                        bayesian_settings_cv["max_convergence_retries"] = 1
+                    effective_oof_mode = requested_oof_mode
+
+                bayesian_sampling_diagnostics["oof_execution_mode_requested"] = requested_oof_mode
+                bayesian_sampling_diagnostics["oof_execution_mode_effective"] = effective_oof_mode
+                bayesian_sampling_diagnostics["oof_simplified_reason"] = oof_simplified_reason
+
+                LOGGER.info(
+                    "Bayesian OOF start: requested_mode=%s effective_mode=%s reason=%s convergence_mode=%s sampler(draws=%d,tune=%d,chains=%d,target_accept=%.3f,max_treedepth=%d,retries=%d,simplified=%s) backend=%s",
+                    requested_oof_mode,
+                    effective_oof_mode,
+                    str(oof_simplified_reason or "none"),
+                    str(convergence_failure_mode),
+                    int(bayesian_settings_cv.get("draws", 0)),
+                    int(bayesian_settings_cv.get("tune", 0)),
+                    int(bayesian_settings_cv.get("chains", 0)),
+                    float(bayesian_settings_cv.get("target_accept", 0.0)),
+                    int(bayesian_settings_cv.get("max_treedepth", 0)),
+                    int(bayesian_settings_cv.get("max_convergence_retries", 0)),
+                    bool(bayesian_settings_cv.get("bayesian_simplified_mode", False)),
+                    str(bayesian_sampling_diagnostics.get("sampling_backend_effective", "pymc")),
+                )
                 bayes_oof_kwargs: dict[str, Any] = {
                     "features_df": subset_model_input_df,
                     "outbreak_target": subset_target,
@@ -650,6 +751,7 @@ def run_bayesian_phase(
                     LOGGER.warning("No Bayesian OOF predictions available; headline Bayesian metrics not produced.")
                     state.degraded_reasons.append({"code": "bayesian_no_oof_predictions"})
             else:
+                bayesian_sampling_diagnostics["oof_execution_mode_effective"] = "suppressed_degraded"
                 LOGGER.warning("Bayesian track is in degraded/fallback mode; headline Bayesian OOF metrics suppressed.")
 
             if bayesian_idata is not None:
@@ -663,6 +765,15 @@ def run_bayesian_phase(
                     ess_threshold=float(bayesian_settings_fullfit.get("ess_warn_threshold", 200.0)),
                     max_tree_depth_threshold=float(bayesian_settings_fullfit.get("max_treedepth", 12)),
                 )
+                grouped_diagnostics_frame = summarize_diagnostics_by_group(
+                    bayesian_idata,
+                    rhat_threshold=float(bayesian_settings_fullfit.get("rhat_warn_threshold", 1.05)),
+                    ess_threshold=float(bayesian_settings_fullfit.get("ess_warn_threshold", 200.0)),
+                )
+                grouped_diagnostics_path = bayesian_diag_dir / "rhat_ess_grouped.csv"
+                grouped_diagnostics_frame.to_csv(grouped_diagnostics_path, index=False)
+                state.artifacts["bayesian_rhat_ess_grouped"] = grouped_diagnostics_path
+                grouped_records = grouped_diagnostics_frame.replace({np.nan: None}).to_dict(orient="records")
                 convergence.update(
                     {
                         "simplified_mode": bool(bayesian_sampling_diagnostics.get("simplified_mode", False)),
@@ -719,7 +830,19 @@ def run_bayesian_phase(
                         "compute_backend_fallback_reason": bayesian_sampling_diagnostics.get(
                             "compute_backend_fallback_reason"
                         ),
+                        "grouped_diagnostics": grouped_records,
                     }
+                )
+                convergence_log_fn = LOGGER.info if bool(convergence.get("converged", False)) else LOGGER.warning
+                convergence_log_fn(
+                    "Bayesian convergence summary: converged=%s mode=%s divergences=%.0f r_hat_max=%.4f ess_min=%.1f grouped_fails(rhat=%d,ess=%d)",
+                    bool(convergence.get("converged", False)),
+                    str(convergence.get("mode_used", "unknown")),
+                    float(convergence.get("divergences", 0.0)),
+                    float(convergence.get("r_hat_max", 1.0)),
+                    float(convergence.get("ess_min", 0.0)),
+                    int(grouped_diagnostics_frame["fail_rhat_count"].sum()) if not grouped_diagnostics_frame.empty else 0,
+                    int(grouped_diagnostics_frame["fail_ess_count"].sum()) if not grouped_diagnostics_frame.empty else 0,
                 )
                 safe_write_json_fn(convergence, bayesian_diag_dir / "convergence.json")
                 bayesian_convergence_payload = convergence
