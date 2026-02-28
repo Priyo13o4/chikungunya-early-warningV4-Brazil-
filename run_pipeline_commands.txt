@@ -85,3 +85,119 @@ print('rm_req=', rm.get('bayesian_covariates_requested'))
 print('mf_req=', (mf.get('bayesian_covariates') or {}).get('requested'))
 print('rk_req=', rk.get('covariates_requested'))
 PY
+
+# 🖥️ tmux Quick Reference
+
+A minimal, practical `tmux` cheat sheet for everyday use.
+
+---
+
+## 🚀 Start a New Session
+
+```bash
+tmux
+```
+
+Start with a custom name (recommended):
+
+```bash
+tmux new -s training
+```
+
+---
+
+## 🖱 Enable Mouse Scrolling (Per Session)
+
+1. Press `Ctrl + b`
+2. Press `:`
+3. Type:
+
+```bash
+set -g mouse on
+```
+
+You can now scroll using your mouse or trackpad.
+
+---
+
+## 🔒 Detach (Keep It Running in Background)
+
+Press:
+
+```
+Ctrl + b
+d
+```
+
+Your session continues running safely.
+
+---
+
+## 🔁 Reattach to a Session
+
+Attach to the most recent session:
+
+```bash
+tmux attach
+```
+
+Attach to a named session:
+
+```bash
+tmux attach -t training
+```
+
+---
+
+## 📋 List Running Sessions
+
+```bash
+tmux ls
+```
+
+---
+
+## ❌ Kill a Session
+
+Inside the tmux window:
+
+```bash
+exit
+```
+
+Or from outside:
+
+```bash
+tmux kill-session -t training
+```
+
+---
+
+## 🧩 Split Pane (Optional – Useful for Monitoring)
+
+Split vertically:
+
+```
+Ctrl + b %
+```
+
+Split horizontally:
+
+```
+Ctrl + b "
+```
+
+Switch between panes:
+
+```
+Ctrl + b + Arrow Key
+```
+
+---## 🧹 Clear Scrollback Buffer
+
+To clear the scrollback buffer in tmux:
+
+1. Press `Ctrl + b`
+2. Press `Ctrl + L`
+
+This clears the current pane's scrollback buffer, which is useful when you're dealing with large outputs and want to clean up the view.
