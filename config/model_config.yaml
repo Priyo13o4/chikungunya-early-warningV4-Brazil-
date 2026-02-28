@@ -43,6 +43,7 @@ bayesian_model:
   rhat_warn_threshold: 1.05
   ess_warn_threshold: 200.0
   grouped_temporal_ess_fail_fraction_threshold: 0.20
+  grouped_temporal_rhat_fail_fraction_threshold: 0.20
   outbreak_threshold_default_cases: 1.0
   posterior_sample_cap: 500
   predictive_chunk_rows: 4000
