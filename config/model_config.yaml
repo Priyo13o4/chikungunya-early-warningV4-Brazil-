@@ -23,9 +23,9 @@ bayesian_model:
     - humidity
   # sampling_backend: auto|pymc|jax_numpyro
   sampling_backend: auto
-  draws: 3000
-  tune: 3000
-  chains: 4
+  draws: 4000
+  tune: 4000
+  chains: 6
   bayesian_progress: true
   target_accept: 0.95
   max_treedepth: 12
@@ -50,16 +50,16 @@ bayesian_model:
 
 bayesian_model_profiles:
   cv:
-    chains: 4
-    tune: 2500
-    draws: 2000
+    chains: 6
+    tune: 3000
+    draws: 3000
     target_accept: 0.95
     max_treedepth: 12
     bayesian_progress: false
   final:
-    chains: 4
-    tune: 3000
-    draws: 3000
+    chains: 6
+    tune: 4000
+    draws: 4000
     target_accept: 0.95
     max_treedepth: 12
     bayesian_progress: true
