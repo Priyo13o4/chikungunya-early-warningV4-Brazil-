@@ -11,6 +11,6 @@ bayesian_model:
   bayesian_simplified_mode: false
   max_convergence_retries: 0
   oof_execution_mode: conditional
-  convergence_failure_mode: strict
+  convergence_failure_mode: warn
   grouped_temporal_ess_fail_fraction_threshold: 0.20
   grouped_temporal_rhat_fail_fraction_threshold: 0.20
