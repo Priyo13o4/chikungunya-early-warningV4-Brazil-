@@ -759,12 +759,16 @@ def run(
         sampling_backend_requested_raw = "auto"
     bayesian_settings["sampling_backend"] = runtime_config.normalize_sampling_backend(sampling_backend_requested_raw)
 
+    # Resolve two concrete Bayesian configs:
+    # - fullfit: final model pass
+    # - cv: OOF/CV pass (typically lighter for iterative testing)
     bayesian_settings_fullfit, bayesian_settings_cv, bayesian_profile_usage = runtime_config.resolve_bayesian_profile_settings(
         bayesian_settings=bayesian_settings,
         bayesian_profiles=bayesian_profiles,
         profile_mode=bayesian_profile_mode,
     )
 
+    # CLI overrides are applied to both paths so tests and fullfit stay in sync when explicitly overridden.
     if bayesian_overrides:
         non_null_overrides = {key: value for key, value in bayesian_overrides.items() if value is not None}
         if non_null_overrides:

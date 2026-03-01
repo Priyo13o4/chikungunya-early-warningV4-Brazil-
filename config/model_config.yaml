@@ -23,10 +23,11 @@ bayesian_model:
     - humidity
   # sampling_backend: auto|pymc|jax_numpyro
   sampling_backend: auto
-  draws: 4000
-  tune: 4000
-  chains: 6
-  bayesian_progress: true
+  # Testing-phase defaults: keep these light; increase gradually for final thesis runs.
+  draws: 600
+  tune: 600
+  chains: 2
+  bayesian_progress: false
   target_accept: 0.95
   max_treedepth: 12
   force_full_bayesian: false
@@ -49,24 +50,27 @@ bayesian_model:
   predictive_chunk_rows: 4000
 
 bayesian_model_profiles:
+  # Fast profile for iterative CV/testing.
   cv:
-    chains: 6
-    tune: 3000
-    draws: 3000
+    chains: 2
+    tune: 500
+    draws: 500
     target_accept: 0.95
     max_treedepth: 12
     bayesian_progress: false
+  # Still moderate for fullfit while remaining testing-friendly.
   final:
-    chains: 6
-    tune: 4000
-    draws: 4000
+    chains: 3
+    tune: 900
+    draws: 900
     target_accept: 0.95
-    max_treedepth: 12
-    bayesian_progress: true
+    max_treedepth: 11
+    bayesian_progress: false
+  # Minimal smoke/dev profile.
   dev:
     chains: 1
-    tune: 200
-    draws: 150
+    tune: 120
+    draws: 120
     target_accept: 0.9
     max_treedepth: 10
     bayesian_progress: false

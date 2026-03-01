@@ -70,7 +70,7 @@ class HierarchicalBayesianModel:
     idata_: Any = None
     district_effects_: dict[str, float] = field(default_factory=dict)
     beta_effects_: dict[str, float] = field(default_factory=dict)
-    latent_by_time_: dict[pd.Timestamp, float] = field(default_factory=dict)
+    latent_by_state_time_: dict[tuple[str, pd.Timestamp], float] = field(default_factory=dict)
     global_intercept_: float = 0.0
     fallback_rate_: float = 0.0
     covariate_means_: dict[str, float] = field(default_factory=dict)
@@ -83,6 +83,27 @@ class HierarchicalBayesianModel:
     sampling_runtime_backend_: str = "cpu"
     simplified_used_: bool = False
     alpha_nb_: float = 1.0
+
+    def _resolve_state_codes(self, frame: pd.DataFrame) -> pd.Series:
+        district_values = frame.get(self.config.district_column, pd.Series("unknown", index=frame.index, dtype="object"))
+        district_prefix = district_values.astype(str).str.split(r"[_\-\s]", n=1).str[0].str.strip().str.upper()
+        district_prefix = district_prefix.str.slice(0, 2)
+        district_prefix = district_prefix.where(district_prefix.str.len() == 2, "unknown")
+
+        geocode_state = pd.Series("unknown", index=frame.index, dtype="object")
+        if "municipio_geocodigo" in frame.columns:
+            geocodigo = frame["municipio_geocodigo"].astype(str).str.replace(r"\D", "", regex=True)
+            geocode_state = geocodigo.str.slice(0, 2)
+            geocode_state = geocode_state.where(geocode_state.str.len() == 2, "unknown")
+
+        state_series = pd.Series("unknown", index=frame.index, dtype="object")
+        if "state" in frame.columns:
+            state_series = frame["state"].astype(str).str.strip()
+            state_series = state_series.replace({"": "unknown", "nan": "unknown", "None": "unknown"}).str.upper()
+
+        state_series = state_series.where(state_series != "unknown", geocode_state)
+        state_series = state_series.where(state_series != "unknown", district_prefix)
+        return state_series
 
     def _validate_covariate_contract(
         self,
@@ -131,6 +152,7 @@ class HierarchicalBayesianModel:
         frame = self._validate_covariate_contract(frame, context="fit", require_variance=True)
 
         frame[self.config.district_column] = frame[self.config.district_column].astype(str).fillna("unknown")
+        frame["__state_code__"] = self._resolve_state_codes(frame).astype(str).fillna("unknown")
         frame = frame.sort_values([self.config.date_column, self.config.district_column]).copy()
         return frame
 
@@ -153,8 +175,16 @@ class HierarchicalBayesianModel:
             for covariate in self.config.climate_covariates
         }
         self.covariate_scales_ = {covariate: 1.0 for covariate in self.config.climate_covariates}
-        time_mean = frame.groupby(self.config.date_column, dropna=False)["__target__"].mean().apply(np.log1p)
-        self.latent_by_time_ = {pd.Timestamp(key): float(value) for key, value in time_mean.items() if pd.notna(key)}
+        if "__state_code__" not in frame.columns:
+            frame["__state_code__"] = self._resolve_state_codes(frame).astype(str).fillna("unknown")
+        state_time_mean = (
+            frame.groupby(["__state_code__", self.config.date_column], dropna=False)["__target__"].mean().apply(np.log1p)
+        )
+        self.latent_by_state_time_ = {
+            (str(state_code), pd.Timestamp(timestamp)): float(value)
+            for (state_code, timestamp), value in state_time_mean.items()
+            if pd.notna(timestamp)
+        }
         self.diagnostics_summary_ = {
             "divergences": float("nan"),
             "max_tree_depth": float("nan"),
@@ -228,6 +258,7 @@ class HierarchicalBayesianModel:
     def _compute_linear_components(self, frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         district_values = frame[self.config.district_column].astype(str)
         date_values = pd.to_datetime(frame[self.config.date_column], errors="coerce")
+        state_values = self._resolve_state_codes(frame).astype(str)
 
         district_default = float(np.log1p(max(self.fallback_rate_, 0.0)))
         district_effect = np.asarray(
@@ -235,11 +266,21 @@ class HierarchicalBayesianModel:
             dtype=float,
         )
 
-        time_default = float(list(self.latent_by_time_.values())[-1]) if self.latent_by_time_ else 0.0
+        global_time_default = float(list(self.latent_by_state_time_.values())[-1]) if self.latent_by_state_time_ else 0.0
+        state_defaults: dict[str, float] = {}
+        for (state_code, _timestamp), latent_value in self.latent_by_state_time_.items():
+            state_defaults[str(state_code)] = float(latent_value)
         time_effect = np.asarray(
             [
-                self.latent_by_time_.get(pd.Timestamp(value), time_default) if pd.notna(value) else 0.0
-                for value in date_values
+                (
+                    self.latent_by_state_time_.get(
+                        (str(state_code), pd.Timestamp(value)),
+                        state_defaults.get(str(state_code), global_time_default),
+                    )
+                    if pd.notna(value)
+                    else 0.0
+                )
+                for state_code, value in zip(state_values, date_values)
             ],
             dtype=float,
         )
@@ -284,6 +325,7 @@ class HierarchicalBayesianModel:
             frame[self.config.date_column] = pd.NaT
 
         frame = self._validate_covariate_contract(frame, context="predict", require_variance=False)
+        frame["__state_code__"] = self._resolve_state_codes(frame).astype(str).fillna("unknown")
 
         threshold_values, threshold_meta = self._resolve_outbreak_thresholds(frame, outbreak_threshold)
         district_effect, covariate_effect, time_effect, x_scaled = self._compute_linear_components(frame)
@@ -337,14 +379,24 @@ class HierarchicalBayesianModel:
             )
             district_idx = np.where(district_idx >= 0, district_idx, 0)
 
-            if "z_t" in posterior:
-                z_draws = np.asarray(posterior["z_t"].to_numpy(), dtype=np.float32).reshape(
+            if "z_state" in posterior:
+                z_draws = np.asarray(posterior["z_state"].to_numpy(), dtype=np.float32).reshape(
                     -1,
-                    posterior["z_t"].shape[-1],
+                    posterior["z_state"].shape[-2],
+                    posterior["z_state"].shape[-1],
                 )
                 if n_samples_total > sample_cap:
                     z_draws = z_draws[sample_idx]
-                time_coord = posterior["z_t"].coords["time"].to_numpy()
+
+                state_coord = posterior["z_state"].coords["state"].to_numpy()
+                state_to_idx = {str(state_value): idx for idx, state_value in enumerate(state_coord.tolist())}
+                obs_state_idx = np.asarray(
+                    [state_to_idx.get(str(state_code), -1) for state_code in frame["__state_code__"].astype(str)],
+                    dtype=int,
+                )
+                obs_state_idx = np.where(obs_state_idx >= 0, obs_state_idx, 0)
+
+                time_coord = posterior["z_state"].coords["time"].to_numpy()
                 time_to_idx = {pd.Timestamp(str(time_value)): idx for idx, time_value in enumerate(time_coord.tolist())}
                 if len(time_to_idx):
                     last_idx = len(time_to_idx) - 1
@@ -359,6 +411,7 @@ class HierarchicalBayesianModel:
                     obs_time_idx = np.full(len(frame), 0, dtype=int)
             else:
                 z_draws = None
+                obs_state_idx = np.zeros(len(frame), dtype=int)
                 obs_time_idx = np.zeros(len(frame), dtype=int)
 
             n_rows = len(frame)
@@ -392,7 +445,7 @@ class HierarchicalBayesianModel:
                 district_component = alpha_draws_f32[:, district_idx[row_slice]].T
                 beta_component = np.dot(x_scaled_f32[row_slice], beta_draws_f32.T)
                 if z_draws is not None:
-                    time_component = z_draws[:, obs_time_idx[row_slice]].T
+                    time_component = z_draws[:, obs_state_idx[row_slice], obs_time_idx[row_slice]].T
                 else:
                     time_component = 0.0
 
@@ -551,8 +604,10 @@ class HierarchicalBayesianModel:
         pm: Any,
         jax: Any,
         districts: pd.Index,
+        states: pd.Index,
         times: pd.Index,
         district_idx: np.ndarray,
+        state_idx: np.ndarray,
         time_idx: np.ndarray,
         feature_matrix_scaled: np.ndarray,
         observed: np.ndarray,
@@ -571,11 +626,13 @@ class HierarchicalBayesianModel:
 
         coords: dict[str, Any] = {
             "district": districts.astype(str).tolist(),
+            "state": states.astype(str).tolist(),
             "covariate": list(self.config.climate_covariates),
             "obs": np.arange(len(observed)),
         }
         if not simplified_mode:
             coords["time"] = [str(timestamp) for timestamp in times.tolist()]
+            coords["time_inner"] = [str(timestamp) for timestamp in times.tolist()[1:]]
 
         with pm.Model(coords=coords) as model:
             mu_alpha = pm.Normal("mu_alpha", mu=0.0, sigma=1.0)
@@ -590,24 +647,36 @@ class HierarchicalBayesianModel:
             beta = pm.Normal("beta", mu=0.0, sigma=0.4, dims="covariate")
 
             if simplified_mode:
-                z_t_values = np.zeros(len(times), dtype=float)
+                z_state_values = np.zeros((len(states), len(times)), dtype=float)
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
                 rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.45)
                 rho = pm.Deterministic("rho", 0.90 * pm.math.tanh(rho_raw))
-                sigma_z = pm.HalfNormal("sigma_z", sigma=0.25)
-                z_t = pm.AR(
-                    "z_t",
-                    rho=rho,
-                    sigma=sigma_z,
-                    init_dist=pm.Normal.dist(mu=0.0, sigma=0.35),
-                    dims="time",
+                sigma_z_state = pm.HalfNormal("sigma_z_state", sigma=0.25)
+                u_init_s = pm.Normal("u_init_s", mu=0.0, sigma=1.0, dims="state")
+                z_innov_s = pm.Normal("z_innov_s", mu=0.0, sigma=1.0, dims=("state", "time_inner"))
+
+                pytensor = _try_import("pytensor")
+                if pytensor is None:
+                    raise ImportError("pytensor is required for non-centered AR(1) latent recursion")
+
+                def _ar1_step(innov_t: Any, prev_u: Any, rho_param: Any) -> Any:
+                    return rho_param * prev_u + innov_t
+
+                u_scan_t, _ = pytensor.scan(
+                    fn=_ar1_step,
+                    sequences=[z_innov_s.T],
+                    outputs_info=[u_init_s],
+                    non_sequences=[rho],
+                    strict=True,
                 )
-                linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta) + z_t[time_idx]
-                z_t_values = np.full(len(times), np.nan, dtype=float)
+                u_t = pm.math.concatenate([u_init_s[:, None], u_scan_t.T], axis=1)
+                z_state = pm.Deterministic("z_state", sigma_z_state * u_t, dims=("state", "time"))
+                linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta) + z_state[state_idx, time_idx]
+                z_state_values = np.full((len(states), len(times)), np.nan, dtype=float)
 
             mu = pm.math.exp(pm.math.clip(linear, -10.0, 10.0))
-            alpha_nb = pm.LogNormal("alpha_nb", mu=0.0, sigma=0.5)
+            alpha_nb = pm.HalfNormal("alpha_nb", sigma=1.0)
             pm.NegativeBinomial("cases_obs", mu=mu, alpha=alpha_nb, observed=observed, dims="obs")
 
             LOGGER.info(
@@ -649,19 +718,21 @@ class HierarchicalBayesianModel:
         if posterior is None or "alpha_district" not in posterior or "beta" not in posterior:
             raise RuntimeError("JAX sampler posterior missing required variables for downstream diagnostics")
 
-        if not simplified_mode and "z_t" in idata.posterior:
-            z_t_values = np.asarray(idata.posterior["z_t"].mean(dim=("chain", "draw")).to_numpy(), dtype=float)
+        if not simplified_mode and "z_state" in idata.posterior:
+            z_state_values = np.asarray(idata.posterior["z_state"].mean(dim=("chain", "draw")).to_numpy(), dtype=float)
 
         runtime_backend = self._infer_jax_runtime_backend(jax)
-        return model, idata, z_t_values, runtime_backend
+        return model, idata, z_state_values, runtime_backend
 
     def _fit_pymc_model(
         self,
         *,
         pm: Any,
         districts: pd.Index,
+        states: pd.Index,
         times: pd.Index,
         district_idx: np.ndarray,
+        state_idx: np.ndarray,
         time_idx: np.ndarray,
         feature_matrix_scaled: np.ndarray,
         observed: np.ndarray,
@@ -669,11 +740,13 @@ class HierarchicalBayesianModel:
     ) -> tuple[Any, Any, np.ndarray]:
         coords: dict[str, Any] = {
             "district": districts.astype(str).tolist(),
+            "state": states.astype(str).tolist(),
             "covariate": list(self.config.climate_covariates),
             "obs": np.arange(len(observed)),
         }
         if not simplified_mode:
             coords["time"] = [str(timestamp) for timestamp in times.tolist()]
+            coords["time_inner"] = [str(timestamp) for timestamp in times.tolist()[1:]]
 
         with pm.Model(coords=coords) as model:
             mu_alpha = pm.Normal("mu_alpha", mu=0.0, sigma=1.0)
@@ -688,24 +761,36 @@ class HierarchicalBayesianModel:
             beta = pm.Normal("beta", mu=0.0, sigma=0.4, dims="covariate")
 
             if simplified_mode:
-                z_t_values = np.zeros(len(times), dtype=float)
+                z_state_values = np.zeros((len(states), len(times)), dtype=float)
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
                 rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.45)
                 rho = pm.Deterministic("rho", 0.90 * pm.math.tanh(rho_raw))
-                sigma_z = pm.HalfNormal("sigma_z", sigma=0.25)
-                z_t = pm.AR(
-                    "z_t",
-                    rho=rho,
-                    sigma=sigma_z,
-                    init_dist=pm.Normal.dist(mu=0.0, sigma=0.35),
-                    dims="time",
+                sigma_z_state = pm.HalfNormal("sigma_z_state", sigma=0.25)
+                u_init_s = pm.Normal("u_init_s", mu=0.0, sigma=1.0, dims="state")
+                z_innov_s = pm.Normal("z_innov_s", mu=0.0, sigma=1.0, dims=("state", "time_inner"))
+
+                pytensor = _try_import("pytensor")
+                if pytensor is None:
+                    raise ImportError("pytensor is required for non-centered AR(1) latent recursion")
+
+                def _ar1_step(innov_t: Any, prev_u: Any, rho_param: Any) -> Any:
+                    return rho_param * prev_u + innov_t
+
+                u_scan_t, _ = pytensor.scan(
+                    fn=_ar1_step,
+                    sequences=[z_innov_s.T],
+                    outputs_info=[u_init_s],
+                    non_sequences=[rho],
+                    strict=True,
                 )
-                linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta) + z_t[time_idx]
-                z_t_values = np.full(len(times), np.nan, dtype=float)
+                u_t = pm.math.concatenate([u_init_s[:, None], u_scan_t.T], axis=1)
+                z_state = pm.Deterministic("z_state", sigma_z_state * u_t, dims=("state", "time"))
+                linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta) + z_state[state_idx, time_idx]
+                z_state_values = np.full((len(states), len(times)), np.nan, dtype=float)
 
             mu = pm.math.exp(pm.math.clip(linear, -10.0, 10.0))
-            alpha_nb = pm.LogNormal("alpha_nb", mu=0.0, sigma=0.5)
+            alpha_nb = pm.HalfNormal("alpha_nb", sigma=1.0)
             pm.NegativeBinomial("cases_obs", mu=mu, alpha=alpha_nb, observed=observed, dims="obs")
 
             LOGGER.info(
@@ -735,17 +820,19 @@ class HierarchicalBayesianModel:
             )
 
         if not simplified_mode:
-            z_t_values = np.asarray(idata.posterior["z_t"].mean(dim=("chain", "draw")).to_numpy(), dtype=float)
+            z_state_values = np.asarray(idata.posterior["z_state"].mean(dim=("chain", "draw")).to_numpy(), dtype=float)
 
-        return model, idata, z_t_values
+        return model, idata, z_state_values
 
     def _fit_with_selected_backend(
         self,
         *,
         pm: Any,
         districts: pd.Index,
+        states: pd.Index,
         times: pd.Index,
         district_idx: np.ndarray,
+        state_idx: np.ndarray,
         time_idx: np.ndarray,
         feature_matrix_scaled: np.ndarray,
         observed: np.ndarray,
@@ -762,12 +849,14 @@ class HierarchicalBayesianModel:
                 numpyro_module = _try_import("numpyro")
                 if jax_module is None or numpyro_module is None:
                     raise ImportError("missing optional JAX dependencies 'jax' and/or 'numpyro'")
-                model, idata, z_t_values, actual_runtime_backend = self._fit_jax_numpyro_model(
+                model, idata, z_state_values, actual_runtime_backend = self._fit_jax_numpyro_model(
                     pm=pm,
                     jax=jax_module,
                     districts=districts,
+                    states=states,
                     times=times,
                     district_idx=district_idx,
+                    state_idx=state_idx,
                     time_idx=time_idx,
                     feature_matrix_scaled=feature_matrix_scaled,
                     observed=observed,
@@ -776,7 +865,7 @@ class HierarchicalBayesianModel:
                 return (
                     model,
                     idata,
-                    z_t_values,
+                    z_state_values,
                     requested_sampling_backend,
                     effective_sampling_backend,
                     sampling_fallback_reason,
@@ -801,11 +890,13 @@ class HierarchicalBayesianModel:
                 effective_sampling_backend = "pymc"
                 actual_runtime_backend = "cpu"
 
-        model, idata, z_t_values = self._fit_pymc_model(
+        model, idata, z_state_values = self._fit_pymc_model(
             pm=pm,
             districts=districts,
+            states=states,
             times=times,
             district_idx=district_idx,
+            state_idx=state_idx,
             time_idx=time_idx,
             feature_matrix_scaled=feature_matrix_scaled,
             observed=observed,
@@ -814,7 +905,7 @@ class HierarchicalBayesianModel:
         return (
             model,
             idata,
-            z_t_values,
+            z_state_values,
             requested_sampling_backend,
             effective_sampling_backend,
             sampling_fallback_reason,
@@ -825,9 +916,10 @@ class HierarchicalBayesianModel:
         self,
         *,
         idata: Any,
+        states: pd.Index,
         districts: pd.Index,
         times: pd.Index,
-        z_t_values: np.ndarray,
+        z_state_values: np.ndarray,
         simplified_mode: bool,
         diagnostics_summary: dict[str, float],
     ) -> None:
@@ -850,12 +942,22 @@ class HierarchicalBayesianModel:
         }
         self.alpha_nb_ = float(posterior["alpha_nb"].mean().item()) if "alpha_nb" in posterior else 1.0
 
+        if "rho" in posterior:
+            rho_mean = float(posterior["rho"].mean().item())
+            if abs(rho_mean) > 0.89:
+                LOGGER.warning("Posterior mean rho is near AR(1) boundary: rho=%.4f", rho_mean)
+
         if simplified_mode:
-            self.latent_by_time_ = {pd.Timestamp(timestamp): 0.0 for timestamp in times}
+            self.latent_by_state_time_ = {
+                (str(state_code), pd.Timestamp(timestamp)): 0.0
+                for state_code in states
+                for timestamp in times
+            }
         else:
-            self.latent_by_time_ = {
-                pd.Timestamp(timestamp): float(z_t_values[idx])
-                for idx, timestamp in enumerate(times)
+            self.latent_by_state_time_ = {
+                (str(state_code), pd.Timestamp(timestamp)): float(z_state_values[state_idx, time_idx])
+                for state_idx, state_code in enumerate(states)
+                for time_idx, timestamp in enumerate(times)
             }
 
         self.simplified_used_ = simplified_mode
@@ -884,6 +986,11 @@ class HierarchicalBayesianModel:
         districts = pd.Index(sorted(frame[self.config.district_column].dropna().unique()), dtype="object")
         district_to_idx = {district: idx for idx, district in enumerate(districts)}
         district_idx = frame[self.config.district_column].map(district_to_idx).astype(int).to_numpy()
+
+        state_codes = frame["__state_code__"].astype(str)
+        states = pd.Index(sorted(state_codes.dropna().unique()), dtype="object")
+        state_to_idx = {state_code: idx for idx, state_code in enumerate(states)}
+        state_idx = state_codes.map(state_to_idx).astype(int).to_numpy()
 
         times = pd.Index(sorted(frame[self.config.date_column].dropna().unique()))
         time_to_idx = {timestamp: idx for idx, timestamp in enumerate(times)}
@@ -918,7 +1025,7 @@ class HierarchicalBayesianModel:
         (
             model,
             idata,
-            z_t_values,
+            z_state_values,
             requested_sampling_backend,
             effective_sampling_backend,
             sampling_fallback_reason,
@@ -926,8 +1033,10 @@ class HierarchicalBayesianModel:
         ) = self._fit_with_selected_backend(
             pm=pm,
             districts=districts,
+            states=states,
             times=times,
             district_idx=district_idx,
+            state_idx=state_idx,
             time_idx=time_idx,
             feature_matrix_scaled=feature_matrix_scaled,
             observed=observed,
@@ -977,11 +1086,13 @@ class HierarchicalBayesianModel:
                 diagnostics_summary.get("r_hat_max"),
                 diagnostics_summary.get("ess_min"),
             )
-            model, idata, z_t_values = self._fit_pymc_model(
+            model, idata, z_state_values = self._fit_pymc_model(
                 pm=pm,
                 districts=districts,
+                states=states,
                 times=times,
                 district_idx=district_idx,
+                state_idx=state_idx,
                 time_idx=time_idx,
                 feature_matrix_scaled=feature_matrix_scaled,
                 observed=observed,
@@ -1003,9 +1114,10 @@ class HierarchicalBayesianModel:
         self.model_ = model
         self._finalize_from_posterior(
             idata=idata,
+            states=states,
             districts=districts,
             times=times,
-            z_t_values=z_t_values,
+            z_state_values=z_state_values,
             simplified_mode=simplified_mode,
             diagnostics_summary=diagnostics_summary,
         )

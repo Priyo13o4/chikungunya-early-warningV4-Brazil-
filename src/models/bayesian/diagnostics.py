@@ -14,7 +14,7 @@ LOGGER = logging.getLogger(__name__)
 _GROUP_PREFIXES: dict[str, tuple[str, ...]] = {
     "random_effects": ("mu_alpha", "sigma_alpha", "alpha_raw", "alpha_district"),
     "fixed_effects": ("beta",),
-    "temporal_state": ("rho_raw", "rho", "sigma_z", "z_t"),
+    "temporal_state": ("rho_raw", "rho", "sigma_z", "z_t", "sigma_z_state", "z_state"),
     "likelihood": ("alpha_nb",),
 }
 _GROUP_ORDER: tuple[str, ...] = (

@@ -16,6 +16,7 @@ python run_pipeline.py \
   --raw-data data/processed/brazil_chik_dataset_top300_final.csv \
   --start-year 2015 \
   --end-year 2025 \
+  --bayesian-profile-mode cv \
   --skip-visualizations \
   --no-strict-feature-gate \
   --log-level INFO
@@ -41,26 +42,31 @@ python run_pipeline.py \
   --no-strict-feature-gate \
   --log-level INFO
 
+# Testing-phase run (lighter profile; good default during iteration)
 PYTHONUNBUFFERED=1 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2025 \
+  --bayesian-profile-mode cv \
   --bayesian-progress \
   --skip-visualizations \
   --no-strict-feature-gate \
   --log-level INFO \
   2>&1 | tee logs.txt
   
+# Explicit low-budget override run (quick diagnostics/smoke)
 PYTHONUNBUFFERED=1 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2025 \
-  --bayesian-chains 4 \
+  --bayesian-chains 2 \
+  --bayesian-tune 300 \
+  --bayesian-draws 300 \
   --bayesian-progress \
   --skip-visualizations \
   --no-strict-feature-gate \
   --log-level INFO \
-  2>&1 | tee logs_4chains.txt
+  2>&1 | tee logs_low_budget.txt
 
 PYTHONUNBUFFERED=1 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
@@ -78,6 +84,17 @@ python run_pipeline.py \
   --start-year 2015 \
   --end-year 2020 \
   --bayesian-profile-mode dev \
+  --bayesian-progress \
+  --skip-visualizations \
+  --no-strict-feature-gate \
+  --log-level INFO
+
+# Higher-budget confirmation run (use when you intentionally scale up)
+python run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
+  --start-year 2015 \
+  --end-year 2025 \
+  --bayesian-profile-mode final \
   --bayesian-progress \
   --skip-visualizations \
   --no-strict-feature-gate \
