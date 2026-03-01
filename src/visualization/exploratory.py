@@ -150,10 +150,3 @@ def plot_missingness_summary(
     labels = [str(label) for label in missing_pct.index.tolist()]
     ax.set_xticklabels(_sparsify_labels(labels, max_labels=30), rotation=70, ha="right")
     return _save_figure(fig, output_dir, filename)
-
-
-def save_exploratory_summary(output_dir: Path) -> Path:
-    """Preserved compatibility helper; no placeholder file is written."""
-    target_dir = _get_output_dir(output_dir)
-    logger.warning("Exploratory summary stub called; no placeholder .txt is written")
-    return target_dir

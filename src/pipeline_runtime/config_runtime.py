@@ -72,7 +72,7 @@ def parse_args() -> argparse.Namespace:
         help="Optional adapter config YAML with dynamic import paths for load/label/features/CV callables",
     )
     parser.add_argument("--cv-config", type=Path, default=Path("config/cv_config.yaml"), help="Path to temporal CV config YAML")
-    parser.add_argument("--raw-data", type=Path, default=Path("data/processed/brazil_chik_dataset_final.csv"), help="Path to raw CSV data file")
+    parser.add_argument("--raw-data", type=Path, default=Path("data/processed/brazil_chik_dataset_top300_final.csv"), help="Path to raw CSV data file")
     parser.add_argument(
         "--population-data",
         type=Path,

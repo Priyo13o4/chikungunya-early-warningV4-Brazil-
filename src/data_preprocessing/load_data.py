@@ -188,11 +188,6 @@ def load_census_data(
     return df
 
 
-def load_raw_data(path: Path) -> pd.DataFrame:
-    """Backward-compatible loader for existing pipeline usage."""
-    return load_epiclim_data(path)
-
-
 def run(
     epiclim_path: Path,
     census_path: Path | None = None,

@@ -155,10 +155,3 @@ def plot_convergence_comparison(
     ax.set_ylabel("Value")
     ax.legend(loc="best")
     return _save_figure(fig, output_dir, filename)
-
-
-def save_diagnostic_plot_stub(output_dir: Path) -> Path:
-    """Preserved compatibility helper; no placeholder file is written."""
-    target_dir = _get_output_dir(output_dir)
-    logger.warning("Diagnostic plot stub called; no placeholder .txt is written")
-    return target_dir

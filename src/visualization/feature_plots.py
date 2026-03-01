@@ -120,10 +120,3 @@ def plot_shap_summary(
     plt.close(fig)
     logger.info("Saved SHAP summary figure to %s", path)
     return path
-
-
-def save_feature_plot_stub(output_dir: Path) -> Path:
-    """Preserved compatibility helper; no placeholder file is written."""
-    target_dir = _get_output_dir(output_dir)
-    logger.warning("Feature plot stub called; no placeholder .txt is written")
-    return target_dir

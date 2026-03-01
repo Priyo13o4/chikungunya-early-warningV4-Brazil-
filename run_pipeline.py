@@ -32,16 +32,11 @@ except Exception as e:
 import argparse
 from dataclasses import asdict
 from datetime import datetime, timezone
-import hashlib
-import importlib
 import inspect
 import json
 import logging
 from pathlib import Path
-import random
 import re
-import subprocess
-import sys
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -115,28 +110,6 @@ _ADAPTER_CALLABLE_KEYS: tuple[str, ...] = (
     "build_fold_ledger",
     "generate_time_splits",
 )
-
-_CONTRACT_REPORT_FILES: tuple[str, ...] = (
-    "run_manifest.json",
-    "run_metadata.json",
-    "fold_ledger.json",
-    "degraded_run.json",
-    "feature_quality_gate_report.json",
-    "model_input_leakage_audit.json",
-)
-_CONTRACT_METRIC_FILES: tuple[str, ...] = (
-    "baseline_backend_metadata.json",
-    "baseline_metrics.json",
-    "baseline_metrics_fullfit.json",
-    "bayesian_metrics.json",
-    "bayesian_metrics_fullfit.json",
-    "bayesian_risk_metadata.json",
-    "track_comparison.csv",
-    "track_comparison.md",
-    "decision_alerts.csv",
-    "bayesian_convergence_summary.csv",
-    "bayesian_convergence_summary.md",
-)
 _DEFAULT_CURATED_MUNICIPALITIES_PATH = Path("resources/curated_municipalities_v1.json")
 _BAYESIAN_OOF_HARD_FAIL_MARKERS: tuple[str, ...] = (
     "cv statistical gate failure",
@@ -181,10 +154,6 @@ def _assert_no_forbidden_feature_columns(
 
 def _load_curated_municipality_contract(contract_path: Path) -> dict[str, Any]:
     return runtime_curated_contract.load_curated_municipality_contract(contract_path)
-
-
-def _resolve_municipality_column(df: pd.DataFrame) -> str:
-    return runtime_curated_contract.resolve_municipality_column(df)
 
 
 def _apply_curated_municipality_filter(
@@ -268,269 +237,6 @@ def _build_bayesian_config(strict_dependencies: bool, bayesian_settings: dict[st
     )
 
 
-def _load_yaml_config(config_path: Path) -> dict[str, Any]:
-    if not config_path.exists():
-        LOGGER.warning("Model config not found at %s; using defaults", config_path)
-        return {}
-    try:
-        import yaml
-    except Exception as yaml_error:
-        LOGGER.warning("PyYAML not available (%s); unable to read %s", yaml_error, config_path)
-        return {}
-
-    try:
-        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except Exception as load_error:
-        LOGGER.warning("Unable to load YAML config from %s: %s", config_path, load_error)
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
-
-
-def _deep_merge_dict(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in overlay.items():
-        existing = merged.get(key)
-        if isinstance(existing, dict) and isinstance(value, dict):
-            merged[key] = _deep_merge_dict(existing, value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def _import_callable(path_spec: str) -> Callable[..., Any]:
-    spec = str(path_spec).strip()
-    if ":" in spec:
-        module_name, attribute_name = spec.split(":", 1)
-    else:
-        module_name, _, attribute_name = spec.rpartition(".")
-    if not module_name or not attribute_name:
-        raise ValueError(f"Invalid callable import path: '{path_spec}'")
-    module = importlib.import_module(module_name)
-    loaded = getattr(module, attribute_name, None)
-    if not callable(loaded):
-        raise TypeError(f"Imported object is not callable: '{path_spec}'")
-    return loaded
-
-
-def _resolve_adapter_callable(
-    adapter_config: dict[str, Any],
-    *,
-    key: str,
-    default: Callable[..., Any],
-) -> Callable[..., Any]:
-    configured = adapter_config.get(key)
-    if not configured:
-        return default
-    try:
-        loaded = _import_callable(str(configured))
-    except Exception as import_error:
-        LOGGER.warning(
-            "Unable to load adapter callable '%s' from key '%s' (%s); using default %s",
-            configured,
-            key,
-            import_error,
-            default.__name__,
-        )
-        return default
-    LOGGER.info("Adapter callable enabled for '%s': %s", key, configured)
-    return loaded
-
-
-def _is_brazil_adapter_config_active(adapter_config: dict[str, Any]) -> bool:
-    if not isinstance(adapter_config, dict) or not adapter_config:
-        return False
-
-    load_data_spec: str | None = None
-    non_load_specs: list[str] = []
-    for key in _ADAPTER_CALLABLE_KEYS:
-        value = adapter_config.get(key)
-        if not value:
-            continue
-        spec = str(value).strip()
-        if key == "load_data":
-            load_data_spec = spec
-            continue
-        non_load_specs.append(spec)
-
-    if not non_load_specs:
-        return False
-    if not all(spec.startswith("projects.brazil_chik.") for spec in non_load_specs):
-        return False
-    if load_data_spec is None:
-        return True
-    return load_data_spec.startswith("projects.brazil_chik.") or load_data_spec.startswith("src.")
-
-
-def _audit_train_fold_threshold_scope(
-    df: pd.DataFrame,
-    *,
-    selected_percentile: int,
-    cv_config: TimeSeriesCVConfig,
-    case_column: str = "cases",
-    district_column: str = "district",
-    date_column: str = "date",
-) -> dict[str, Any]:
-    threshold_column = f"threshold_p{int(selected_percentile)}"
-    required_columns = {case_column, district_column, date_column, threshold_column}
-    missing = sorted(required_columns.difference(df.columns))
-    if missing:
-        return {
-            "checked": False,
-            "violation_count": 0,
-            "sample_violations": [],
-            "missing_columns": missing,
-            "reason": "missing_required_columns",
-        }
-
-    working = df[[case_column, district_column, date_column, threshold_column]].copy()
-    working[date_column] = pd.to_datetime(working[date_column], errors="coerce")
-    working["_year"] = working[date_column].dt.year
-    working[case_column] = pd.to_numeric(working[case_column], errors="coerce")
-    working[threshold_column] = pd.to_numeric(working[threshold_column], errors="coerce")
-
-    quantile = float(selected_percentile) / 100.0
-    total_violations = 0
-    sample_violations: list[dict[str, Any]] = []
-
-    for valid_year in range(int(cv_config.first_valid_year), int(cv_config.last_valid_year) + 1):
-        train_end_year = valid_year - 1
-        train_start_year = int(getattr(cv_config, "start_train_year", 0) or 0)
-        if train_start_year <= 0:
-            train_start_year = int(valid_year - max(1, int(cv_config.train_window_years)))
-
-        train_mask = working["_year"].between(train_start_year, train_end_year, inclusive="both")
-        valid_mask = working["_year"] == valid_year
-        if not bool(train_mask.fillna(False).any()) or not bool(valid_mask.fillna(False).any()):
-            continue
-
-        train_df = working.loc[train_mask.fillna(False), [district_column, case_column]].dropna(subset=[case_column])
-        if train_df.empty:
-            continue
-        train_quantiles = train_df.groupby(district_column, dropna=False)[case_column].quantile(quantile)
-
-        valid_df = working.loc[valid_mask.fillna(False), [district_column, threshold_column]].copy()
-        valid_df["_expected"] = valid_df[district_column].map(train_quantiles)
-        comparable = valid_df[threshold_column].notna() & valid_df["_expected"].notna()
-        if not comparable.any():
-            continue
-
-        delta = (valid_df.loc[comparable, threshold_column] - valid_df.loc[comparable, "_expected"]).abs()
-        violation_mask = delta > 1e-9
-        year_violations = int(violation_mask.sum())
-        if year_violations <= 0:
-            continue
-
-        total_violations += year_violations
-        if len(sample_violations) < 5:
-            violating_rows = valid_df.loc[comparable].loc[violation_mask].head(5 - len(sample_violations))
-            for _, row in violating_rows.iterrows():
-                sample_violations.append(
-                    {
-                        "valid_year": int(valid_year),
-                        "district": None if pd.isna(row[district_column]) else str(row[district_column]),
-                        "observed_threshold": float(row[threshold_column]),
-                        "expected_train_quantile": float(row["_expected"]),
-                    }
-                )
-
-    return {
-        "checked": True,
-        "violation_count": int(total_violations),
-        "sample_violations": sample_violations,
-        "missing_columns": [],
-        "reason": "ok",
-    }
-
-
-def _set_global_seed(seed: int) -> None:
-    np.random.seed(seed)
-    random.seed(seed)
-
-
-def _call_load_data_compat(
-    load_data_callable: Callable[..., Any],
-    raw_data_path: Path,
-    population_data_path: Path | None,
-    *,
-    start_year: int,
-    end_year: int,
-    discovery_dir: Path,
-) -> tuple[pd.DataFrame, pd.DataFrame | None]:
-    signature = inspect.signature(load_data_callable)
-    parameters = signature.parameters
-    accepts_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
-
-    kwargs: dict[str, Any] = {"discovery_dir": discovery_dir}
-    if "start_year" in parameters or accepts_var_kwargs:
-        kwargs["start_year"] = int(start_year)
-    if "end_year" in parameters or accepts_var_kwargs:
-        kwargs["end_year"] = int(end_year)
-
-    try:
-        return load_data_callable(raw_data_path, population_data_path, **kwargs)
-    except TypeError as call_error:
-        fallback_kwargs = {"discovery_dir": discovery_dir}
-        unsupported_kw_error = "unexpected keyword" in str(call_error).lower() and (
-            "start_year" in str(call_error) or "end_year" in str(call_error)
-        )
-        if kwargs != fallback_kwargs and unsupported_kw_error:
-            LOGGER.info(
-                "Loader callable rejected year bounds (%s); falling back to legacy loader call shape",
-                call_error,
-            )
-            return load_data_callable(raw_data_path, population_data_path, **fallback_kwargs)
-        raise
-
-
-def _call_label_outbreaks_compat(
-    label_callable: Callable[..., Any],
-    df: pd.DataFrame,
-    *,
-    selected_percentile: int,
-    use_percentile_labels: bool,
-    cv_config: TimeSeriesCVConfig,
-    strict_mode: bool,
-) -> pd.DataFrame:
-    signature = inspect.signature(label_callable)
-    parameters = signature.parameters
-    accepts_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
-
-    kwargs: dict[str, Any] = {
-        "selected_percentile": selected_percentile,
-        "use_percentile_labels": use_percentile_labels,
-        "date_column": cv_config.date_column,
-        "first_valid_year": int(cv_config.first_valid_year),
-        "last_valid_year": int(cv_config.last_valid_year),
-        "start_train_year": int(cv_config.start_train_year),
-        "train_window_years": int(cv_config.train_window_years),
-        "threshold_scope": "train_fold",
-    }
-
-    if not accepts_var_kwargs:
-        kwargs = {key: value for key, value in kwargs.items() if key in parameters}
-
-    try:
-        return label_callable(df, **kwargs)
-    except TypeError as call_error:
-        unsupported_kw_error = "unexpected keyword" in str(call_error).lower()
-        if kwargs and unsupported_kw_error:
-            if strict_mode:
-                raise RuntimeError(
-                    "Label callable does not support train-fold leakage-control args under strict mode "
-                    f"(error: {call_error})"
-                ) from call_error
-            LOGGER.info(
-                "Label callable rejected advanced args (%s); falling back to legacy label call shape",
-                call_error,
-            )
-            return label_callable(
-                df,
-                selected_percentile=selected_percentile,
-                use_percentile_labels=use_percentile_labels,
-            )
-        raise
-
-
 def _call_build_feature_matrix_compat(
     feature_callable: Callable[..., Any],
     df: pd.DataFrame,
@@ -580,106 +286,6 @@ def _call_build_feature_matrix_compat(
     return result
 
 
-def _resolve_cv_config(
-    *,
-    cv_config_path: Path,
-    date_column: str,
-    target_column: str,
-    end_year: int,
-) -> tuple[TimeSeriesCVConfig, dict[str, Any]]:
-    raw_cv_config = _load_yaml_config(cv_config_path)
-
-    first_valid_year = int(raw_cv_config.get("first_valid_year", 0) or 0)
-    last_valid_year = int(raw_cv_config.get("last_valid_year", 0) or 0)
-    n_splits = int(raw_cv_config.get("n_splits", 0) or 0)
-
-    if first_valid_year <= 0:
-        first_valid_year = max(2009, (end_year - max(1, n_splits) + 1) if n_splits > 0 else 2014)
-    if last_valid_year <= 0:
-        last_valid_year = end_year
-
-    cv_cfg = TimeSeriesCVConfig(
-        date_column=str(raw_cv_config.get("date_column", date_column)),
-        target_column=str(raw_cv_config.get("target_column", target_column)),
-        start_train_year=int(raw_cv_config.get("start_train_year", 2009)),
-        first_valid_year=int(first_valid_year),
-        last_valid_year=int(last_valid_year),
-        train_window_years=int(raw_cv_config.get("train_window_years", 5)),
-        thesis_strict=bool(raw_cv_config.get("thesis_strict", False)),
-        skip_single_class_folds=bool(raw_cv_config.get("skip_single_class_folds", True)),
-        minimum_evaluated_folds=int(raw_cv_config.get("minimum_evaluated_folds", max(1, min(3, n_splits or 5)))),
-    )
-    effective = {
-        **raw_cv_config,
-        **asdict(cv_cfg),
-    }
-    return cv_cfg, effective
-
-
-def _clear_headline_artifacts(metrics_dir: Path) -> None:
-    for filename in (
-        "baseline_metrics.json",
-        "bayesian_metrics.json",
-        "track_comparison.csv",
-        "track_comparison.md",
-        "bayesian_convergence_summary.csv",
-        "bayesian_convergence_summary.md",
-    ):
-        path = metrics_dir / filename
-        if path.exists():
-            path.unlink()
-
-
-def _clear_contract_artifacts(*, reports_dir: Path, metrics_dir: Path) -> None:
-    for filename in _CONTRACT_REPORT_FILES:
-        path = reports_dir / filename
-        if path.exists():
-            path.unlink()
-    for filename in _CONTRACT_METRIC_FILES:
-        path = metrics_dir / filename
-        if path.exists():
-            path.unlink()
-
-
-def _sha256_file(path: Path) -> str | None:
-    if not path.exists() or not path.is_file():
-        return None
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _git_commit_sha(project_root: Path) -> str | None:
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=project_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except Exception:
-        return None
-    commit = completed.stdout.strip()
-    return commit if commit else None
-
-
-def _json_compatible(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(k): _json_compatible(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_compatible(v) for v in value]
-    return value
-
-
-def _stable_district_shard(value: Any, shard_count: int) -> int:
-    return runtime_memory_filters.stable_district_shard(value, shard_count)
-
-
 def _apply_memory_optimization_filters(
     labeled_df: pd.DataFrame,
     features_df: pd.DataFrame,
@@ -695,132 +301,6 @@ def _apply_memory_optimization_filters(
         date_column=date_column,
         district_column=district_column,
     )
-
-
-def _build_suppressed_metric_payload(*, run_id: str, track: str, reason: str) -> dict[str, Any]:
-    return {
-        "run_id": run_id,
-        "track": track,
-        "suppressed": True,
-        "reason": reason,
-    }
-
-
-def _build_contract_track_comparison_placeholder(*, run_id: str, reason: str) -> tuple[pd.DataFrame, str]:
-    frame = pd.DataFrame(
-        [
-            {
-                "metric": "headline_comparison",
-                "baseline": None,
-                "bayesian": None,
-                "delta": None,
-                "status": "suppressed",
-                "reason": reason,
-                "run_id": run_id,
-            }
-        ]
-    )
-    markdown = (
-        "# Track Comparison\n\n"
-        "| metric | baseline | bayesian | delta | status | reason | run_id |\n"
-        "|---|---:|---:|---:|---|---|---|\n"
-        f"| headline_comparison |  |  |  | suppressed | {reason} | {run_id} |\n"
-    )
-    return frame, markdown
-
-
-def _write_bayesian_convergence_summary(
-    *,
-    metrics_dir: Path,
-    run_id: str,
-    diagnostics: dict[str, Any],
-    convergence_artifact_path: Path | None = None,
-    convergence: dict[str, Any] | None,
-) -> tuple[Path, Path]:
-    if convergence_artifact_path is not None and convergence_artifact_path.exists():
-        convergence_payload = json.loads(convergence_artifact_path.read_text(encoding="utf-8"))
-    else:
-        convergence_payload = convergence or {}
-    summary_row = {
-        "run_id": run_id,
-        "mode_used": str(diagnostics.get("mode_used", "not_run")),
-        "degraded_mode": bool(diagnostics.get("degraded_mode", False)),
-        "fallback_used": bool(diagnostics.get("fallback_used", False)),
-        "converged": bool(convergence_payload.get("converged", False)),
-        "divergences": float(convergence_payload.get("divergences", 0.0) or 0.0),
-        "divergence_threshold": float(convergence_payload.get("divergence_threshold", float("nan"))),
-        "max_tree_depth": float(convergence_payload.get("max_tree_depth", 0.0) or 0.0),
-        "max_tree_depth_threshold": float(convergence_payload.get("max_tree_depth_threshold", float("nan"))),
-        "r_hat_max": float(convergence_payload.get("r_hat_max", 0.0) or 0.0),
-        "rhat_threshold": float(convergence_payload.get("rhat_threshold", float("nan"))),
-        "ess_min": float(convergence_payload.get("ess_min", 0.0) or 0.0),
-        "ess_threshold": float(convergence_payload.get("ess_threshold", float("nan"))),
-    }
-    summary_frame = pd.DataFrame([summary_row])
-    csv_path = metrics_dir / "bayesian_convergence_summary.csv"
-    md_path = metrics_dir / "bayesian_convergence_summary.md"
-    summary_frame.to_csv(csv_path, index=False)
-    md_path.write_text(
-        "# Bayesian Convergence Summary\n\n"
-        + summary_frame.to_markdown(index=False),
-        encoding="utf-8",
-    )
-    return csv_path, md_path
-
-
-def _validate_manifest_contract(
-    *,
-    run_manifest_path: Path,
-    artifacts: dict[str, Path],
-    required_artifact_keys: set[str],
-    expected_run_id: str,
-) -> None:
-    manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
-    manifest_artifacts = manifest.get("artifacts", {})
-
-    missing_in_manifest = sorted(required_artifact_keys.difference(manifest_artifacts.keys()))
-    missing_in_artifacts = sorted(required_artifact_keys.difference(artifacts.keys()))
-    if missing_in_manifest or missing_in_artifacts:
-        raise RuntimeError(
-            "Contract artifact key mismatch "
-            f"(manifest_missing={missing_in_manifest}, artifacts_missing={missing_in_artifacts})"
-        )
-
-    mismatched_paths: list[str] = []
-    missing_files: list[str] = []
-    for key in sorted(required_artifact_keys):
-        artifact_path = artifacts[key]
-        manifest_path = Path(str(manifest_artifacts[key]))
-        if str(artifact_path) != str(manifest_path):
-            mismatched_paths.append(key)
-        if not artifact_path.exists():
-            missing_files.append(str(artifact_path))
-    if mismatched_paths or missing_files:
-        raise RuntimeError(
-            "Contract artifact parity failed "
-            f"(path_mismatch={mismatched_paths}, missing_files={missing_files})"
-        )
-
-    metadata = json.loads(Path(str(manifest_artifacts["run_metadata"])).read_text(encoding="utf-8"))
-    fold_ledger = json.loads(Path(str(manifest_artifacts["fold_ledger"])).read_text(encoding="utf-8"))
-    degraded_run = json.loads(Path(str(manifest_artifacts["degraded_run"])).read_text(encoding="utf-8"))
-
-    run_id_values = {
-        "manifest": str(manifest.get("run_id")),
-        "run_metadata": str(metadata.get("run_id")),
-        "fold_ledger": str(fold_ledger.get("run_id")),
-        "degraded_run": str(degraded_run.get("run_id")),
-    }
-    if any(value != expected_run_id for value in run_id_values.values()):
-        raise RuntimeError(f"run_id parity mismatch: {run_id_values} expected={expected_run_id}")
-
-    suppressed_manifest = bool(manifest.get("headline_claims", {}).get("suppressed", False))
-    suppressed_degraded = bool(degraded_run.get("suppress_headline_comparison", False))
-    if suppressed_manifest != suppressed_degraded:
-        raise RuntimeError(
-            "degraded_run parity mismatch "
-            f"(manifest_suppressed={suppressed_manifest}, degraded_suppressed={suppressed_degraded})"
-        )
 
 
 def _collect_baseline_oof_fold_ids(output_root: Path) -> list[int]:
@@ -1378,6 +858,9 @@ def run(
         discovery_dir=raw_data_path.parent,
     )
 
+    curated_contract_path = Path(
+        str(raw_model_config.get("curated_municipalities_path", _DEFAULT_CURATED_MUNICIPALITIES_PATH))
+    )
     LOGGER.info("Phase: clean")
     cleaned_df = clean_data(raw_df, start_year=start_year, end_year=end_year)
 
@@ -1408,9 +891,6 @@ def run(
                 dropped_rows,
             )
 
-    curated_contract_path = Path(
-        str(raw_model_config.get("curated_municipalities_path", _DEFAULT_CURATED_MUNICIPALITIES_PATH))
-    )
     curated_contract = _load_curated_municipality_contract(curated_contract_path)
     curated_municipality_ids = set(curated_contract["municipality_ids"])
 

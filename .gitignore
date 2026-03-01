@@ -92,3 +92,5 @@ outputs/reports/fold_ledger.json
 outputs/reports/run_*.json
 outputs/reports/degraded_run.json
 outputs/reports/*_report.json
+
+.axon/

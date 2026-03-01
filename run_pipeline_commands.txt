@@ -2,6 +2,24 @@ cd "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implem
 source .venv/bin/activate
 export PYTHONUNBUFFERED=1
 
+python scripts/brazil/build_top300_dataset_snapshot.py \
+  --input data/processed/brazil_chik_dataset_final.csv \
+  --output-data data/processed/brazil_chik_dataset_top300_final.csv \
+  --output-meta outputs/reports/top300_dataset_snapshot.json \
+  --output-meta-md outputs/reports/top300_dataset_snapshot.md \
+  --top-n 300 \
+  --start-year 2015 \
+  --end-year 2025
+
+python run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
+  --raw-data data/processed/brazil_chik_dataset_top300_final.csv \
+  --start-year 2015 \
+  --end-year 2025 \
+  --skip-visualizations \
+  --no-strict-feature-gate \
+  --log-level INFO
+
 python -m pytest -q tests/test_bayesian_model.py tests/test_pipeline_smoke.py tests/test_metrics_integrity.py
 
 python run_pipeline.py \

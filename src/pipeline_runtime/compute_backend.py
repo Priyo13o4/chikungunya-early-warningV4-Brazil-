@@ -83,13 +83,6 @@ def resolve_backends(requested: ComputeBackendConfig) -> dict[str, Any]:
     return _resolve_backends_with_capabilities(requested=requested, capabilities=capabilities)
 
 
-def resolve_effective_backends(
-    config: ComputeBackendConfig,
-    capabilities: ComputeBackendCapabilities,
-) -> dict[str, Any]:
-    return _resolve_backends_with_capabilities(requested=config, capabilities=capabilities)
-
-
 def _resolve_backends_with_capabilities(
     *,
     requested: ComputeBackendConfig,

@@ -340,26 +340,6 @@ def _read_jsonl_rows(input_path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _frame_from_raw_jsonl(
-    *,
-    raw_jsonl_path: Path,
-    uf: str,
-    start_year: int,
-    end_year: int,
-    anchor_weekday: int,
-) -> pd.DataFrame:
-    rows = _read_jsonl_rows(raw_jsonl_path)
-    if not rows:
-        return pd.DataFrame()
-
-    frame = pd.DataFrame(rows)
-    frame = _normalize_columns(frame, uf=uf, anchor_weekday=anchor_weekday)
-    frame = frame.loc[frame["date"].notna()].copy()
-    frame["year"] = frame["date"].dt.year.astype("Int64")
-    frame = frame.loc[frame["year"].between(start_year, end_year, inclusive="both")].copy()
-    return frame
-
-
 def _year_chunks(start_year: int, end_year: int, year_chunk_size: int) -> list[tuple[int, int]]:
     if year_chunk_size <= 0:
         raise ValueError("year_chunk_size must be >= 1")
