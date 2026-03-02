@@ -985,20 +985,20 @@ class HierarchicalBayesianModel:
 
         districts = pd.Index(sorted(frame[self.config.district_column].dropna().unique()), dtype="object")
         district_to_idx = {district: idx for idx, district in enumerate(districts)}
-        district_idx = frame[self.config.district_column].map(district_to_idx).astype(int).to_numpy()
+        district_idx = frame[self.config.district_column].map(district_to_idx).astype(int).to_numpy(dtype=np.int32)
 
         state_codes = frame["__state_code__"].astype(str)
         states = pd.Index(sorted(state_codes.dropna().unique()), dtype="object")
         state_to_idx = {state_code: idx for idx, state_code in enumerate(states)}
-        state_idx = state_codes.map(state_to_idx).astype(int).to_numpy()
+        state_idx = state_codes.map(state_to_idx).astype(int).to_numpy(dtype=np.int32)
 
         times = pd.Index(sorted(frame[self.config.date_column].dropna().unique()))
         time_to_idx = {timestamp: idx for idx, timestamp in enumerate(times)}
-        time_idx = frame[self.config.date_column].map(time_to_idx).fillna(len(times) - 1).astype(int).to_numpy()
+        time_idx = frame[self.config.date_column].map(time_to_idx).fillna(len(times) - 1).astype(int).to_numpy(dtype=np.int32)
 
-        feature_matrix = frame.loc[:, list(self.config.climate_covariates)].to_numpy(dtype=float)
+        feature_matrix = frame.loc[:, list(self.config.climate_covariates)].to_numpy(dtype=np.float32)
         means, scales = self._compute_scaling(feature_matrix)
-        feature_matrix_scaled = (feature_matrix - means) / scales
+        feature_matrix_scaled = ((feature_matrix - means) / scales).astype(np.float32, copy=False)
         self.covariate_means_ = {
             covariate: float(means[idx])
             for idx, covariate in enumerate(self.config.climate_covariates)
@@ -1007,7 +1007,7 @@ class HierarchicalBayesianModel:
             covariate: float(scales[idx])
             for idx, covariate in enumerate(self.config.climate_covariates)
         }
-        observed = frame["__target__"].to_numpy(dtype=float)
+        observed = frame["__target__"].to_numpy(dtype=np.float32)
 
         requested_sampling_backend, effective_sampling_backend = self._choose_sampling_backend(
             str(compute_backend_effective or "cpu")

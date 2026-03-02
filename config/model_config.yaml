@@ -55,8 +55,8 @@ bayesian_model_profiles:
     chains: 2
     tune: 500
     draws: 500
-    target_accept: 0.95
-    max_treedepth: 12
+    target_accept: 0.90
+    max_treedepth: 10
     bayesian_progress: false
   # Still moderate for fullfit while remaining testing-friendly.
   final:

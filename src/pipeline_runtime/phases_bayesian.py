@@ -30,6 +30,112 @@ _BAYESIAN_OOF_HARD_FAIL_MARKERS: tuple[str, ...] = (
 _SUPPORTED_OOF_EXECUTION_MODES: set[str] = {"legacy", "simplified", "conditional"}
 
 
+def _fmt_log_metric(value: Any, *, digits: int = 3) -> str:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return "na"
+    return f"{float(numeric):.{digits}f}"
+
+
+def _extract_sampler_tail_metrics(idata: Any | None) -> dict[str, float | None]:
+    if idata is None:
+        return {
+            "accept_mean": None,
+            "step_size_mean": None,
+            "energy_mean": None,
+        }
+
+    sample_stats = getattr(idata, "sample_stats", None)
+    if sample_stats is None:
+        return {
+            "accept_mean": None,
+            "step_size_mean": None,
+            "energy_mean": None,
+        }
+
+    def _mean_for(keys: tuple[str, ...]) -> float | None:
+        for key in keys:
+            if key in sample_stats:
+                raw = np.asarray(sample_stats[key].to_numpy(), dtype=float)
+                if raw.size == 0:
+                    return None
+                return float(np.nanmean(raw))
+        return None
+
+    return {
+        "accept_mean": _mean_for(("acceptance_rate", "acceptance_probability")),
+        "step_size_mean": _mean_for(("step_size", "step_size_bar")),
+        "energy_mean": _mean_for(("energy",)),
+    }
+
+
+def _log_bayesian_fit_completion(
+    *,
+    scope: str,
+    diagnostics: dict[str, Any],
+    bayesian_settings: dict[str, Any],
+    sampling_diagnostics: dict[str, Any] | None = None,
+    idata: Any | None = None,
+    fold_number: int | None = None,
+    n_train: int | None = None,
+    n_valid: int | None = None,
+) -> None:
+    sampling_diag = dict(sampling_diagnostics or {})
+    sampler_tail = _extract_sampler_tail_metrics(idata)
+
+    fold_label = str(fold_number) if fold_number is not None else "na"
+    mode_used = str(
+        diagnostics.get(
+            "mode_used",
+            "fallback" if bool(diagnostics.get("fallback", 0.0)) else "full_latent_ar",
+        )
+    )
+    degraded_mode = bool(diagnostics.get("degraded_mode", False))
+    fallback_used = bool(
+        diagnostics.get("fallback_used", bool(float(diagnostics.get("fallback", 0.0)) > 0.0))
+    )
+
+    LOGGER.info(
+        "bayes_fit_done scope=%s fold=%s n_train=%s n_valid=%s mode=%s degraded=%s fallback=%s "
+        "div=%s tree=%s rhat=%s ess=%s accept=%s step=%s energy=%s "
+        "backend=%s>%s/%s s_backend=%s>%s sampler(chains=%d,draws=%d,tune=%d,target_accept=%.3f,max_treedepth=%d)",
+        scope,
+        fold_label,
+        n_train if n_train is not None else "na",
+        n_valid if n_valid is not None else "na",
+        mode_used,
+        degraded_mode,
+        fallback_used,
+        _fmt_log_metric(diagnostics.get("divergences"), digits=0),
+        _fmt_log_metric(diagnostics.get("max_tree_depth"), digits=0),
+        _fmt_log_metric(diagnostics.get("r_hat_max"), digits=4),
+        _fmt_log_metric(diagnostics.get("ess_min"), digits=1),
+        _fmt_log_metric(sampler_tail.get("accept_mean"), digits=4),
+        _fmt_log_metric(sampler_tail.get("step_size_mean"), digits=5),
+        _fmt_log_metric(sampler_tail.get("energy_mean"), digits=3),
+        str(sampling_diag.get("requested_backend", "cpu")),
+        str(sampling_diag.get("resolved_backend", "cpu")),
+        str(sampling_diag.get("actual_runtime_backend", "cpu")),
+        str(sampling_diag.get("sampling_backend_requested", bayesian_settings.get("sampling_backend", "auto"))),
+        str(sampling_diag.get("sampling_backend_effective", "pymc")),
+        int(bayesian_settings.get("chains", 0)),
+        int(bayesian_settings.get("draws", 0)),
+        int(bayesian_settings.get("tune", 0)),
+        float(bayesian_settings.get("target_accept", 0.0)),
+        int(bayesian_settings.get("max_treedepth", 0)),
+    )
+
+    if degraded_mode or fallback_used or sampling_diag.get("fallback_reason") is not None:
+        LOGGER.warning(
+            "bayes_fit_detail scope=%s fold=%s strict_mode=%s fallback_reason=%s sampling_fallback_reason=%s",
+            scope,
+            fold_label,
+            str(bayesian_settings.get("convergence_failure_mode", "strict")),
+            sampling_diag.get("fallback_reason"),
+            sampling_diag.get("sampling_backend_fallback_reason"),
+        )
+
+
 def evaluate_strict_convergence_with_groups(
     convergence: dict[str, Any],
     grouped_diagnostics: pd.DataFrame,
@@ -290,6 +396,9 @@ def run_bayesian_track(
         sampling_backend_requested,
         convergence_failure_mode,
     )
+    LOGGER.info(
+        "Bayesian diagnostics note: warmup/per-chain progress metrics are backend-limited; emitting post-fit aggregate diagnostics per completed fit."
+    )
     if backend_metadata["fallback_reason"]:
         LOGGER.warning("%s", backend_metadata["fallback_reason"])
 
@@ -357,6 +466,13 @@ def run_bayesian_track(
             **predictive_metadata,
             **bayesian_model.diagnostics_summary_,
         }
+        _log_bayesian_fit_completion(
+            scope="fullfit",
+            diagnostics=diagnostics,
+            bayesian_settings=bayesian_settings,
+            sampling_diagnostics=sampling_diag,
+            idata=bayesian_model.idata_,
+        )
         return risk_frame, bayesian_model.idata_, diagnostics
     except ImportError as import_error:
         LOGGER.warning("Skipping Bayesian phase due to missing optional dependencies: %s", import_error)
@@ -476,7 +592,7 @@ def collect_bayesian_oof_scores(
             return oof, diagnostics
         return oof
 
-    for train_idx, valid_idx in split_iterator:
+    for fold_number, (train_idx, valid_idx) in enumerate(split_iterator, start=1):
         y_train_binary = pd.to_numeric(outbreak_target.loc[train_idx], errors="coerce").fillna(0).astype(int)
         y_train_counts = pd.to_numeric(count_target.loc[train_idx], errors="coerce").fillna(0.0)
         if y_train_binary.nunique(dropna=True) <= 1:
@@ -535,6 +651,21 @@ def collect_bayesian_oof_scores(
                     "n_train": int(len(train_idx)),
                     "n_valid": int(len(valid_idx)),
                 }
+            )
+            _log_bayesian_fit_completion(
+                scope="cv_fold",
+                diagnostics={
+                    **fold_diag,
+                    "mode_used": "simplified" if bool(getattr(model, "simplified_used_", False)) else "full_latent_ar",
+                    "fallback_used": bool(float(fold_diag.get("fallback", 0.0)) > 0.0),
+                    "degraded_mode": bool(float(fold_diag.get("fallback", 0.0)) > 0.0),
+                },
+                bayesian_settings=fold_settings,
+                sampling_diagnostics=dict(getattr(model, "sampling_diagnostics_", {}) or {}),
+                idata=getattr(model, "idata_", None),
+                fold_number=int(fold_number),
+                n_train=int(len(train_idx)),
+                n_valid=int(len(valid_idx)),
             )
             fold_threshold = threshold_series.loc[valid_idx] if threshold_series is not None else None
             fold_pred = model.predict_with_uncertainty(
