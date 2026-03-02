@@ -1,12 +1,6 @@
 {
-  "accuracy": 0.9396912611198326,
-  "precision": 0.8932835820895523,
-  "recall": 0.6057692307692307,
-  "f1": 0.7219541616405307,
-  "kappa": 0.6895210431308587,
-  "false_alarm_rate": 0.0107421875,
-  "roc_auc": 0.9175207280028612,
-  "pr_auc": 0.7684316608897488,
-  "lead_time_mean": 1.25,
-  "lead_time_utility": 1.0292792792792793
+  "run_id": "20260302T115919Z-5564bb82",
+  "track": "baseline_fullfit",
+  "suppressed": true,
+  "reason": "baseline_not_available"
 }

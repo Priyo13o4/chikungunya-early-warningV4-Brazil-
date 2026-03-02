@@ -20,6 +20,8 @@ from src.models.baselines.model_registry import list_default_model_names, valida
 
 LOGGER = logging.getLogger(__name__)
 
+_CLIMATE_COLUMN_TOKENS: tuple[str, ...] = ("rain", "temp", "humid", "precip", "climate", "lai")
+
 
 @dataclass(frozen=True)
 class BaselineTrainingConfig:
@@ -73,6 +75,127 @@ def _train_single_model(
     return model.fit(X_train, y_train)
 
 
+def _infer_climate_feature_columns(columns: Iterable[str]) -> list[str]:
+    selected: list[str] = []
+    for column in columns:
+        lowered = str(column).lower()
+        if any(token in lowered for token in _CLIMATE_COLUMN_TOKENS):
+            selected.append(str(column))
+    return sorted(set(selected))
+
+
+def _impute_fold_climate_features(
+    X_train: pd.DataFrame,
+    X_valid: pd.DataFrame,
+    *,
+    district_column: str = "district",
+    month_column: str = "month",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    climate_columns = [column for column in _infer_climate_feature_columns(X_train.columns) if column in X_valid.columns]
+    if not climate_columns:
+        return X_train, X_valid
+
+    train_output = X_train.copy()
+    valid_output = X_valid.copy()
+    has_group_keys = district_column in train_output.columns and month_column in train_output.columns
+    if has_group_keys and month_column in valid_output.columns:
+        train_month = pd.to_numeric(train_output[month_column], errors="coerce")
+        valid_month = pd.to_numeric(valid_output[month_column], errors="coerce")
+
+    for column in climate_columns:
+        train_numeric = pd.to_numeric(train_output[column], errors="coerce")
+        valid_numeric = pd.to_numeric(valid_output[column], errors="coerce")
+        train_filled = train_numeric.copy()
+        valid_filled = valid_numeric.copy()
+
+        if has_group_keys and month_column in valid_output.columns:
+            reference = pd.DataFrame(
+                {
+                    "district": train_output[district_column],
+                    "month": train_month,
+                    "value": train_numeric,
+                }
+            )
+            district_month_median = reference.groupby(["district", "month"], dropna=False)["value"].median()
+
+            train_keys = pd.MultiIndex.from_arrays([train_output[district_column], train_month])
+            valid_keys = pd.MultiIndex.from_arrays([valid_output[district_column], valid_month])
+            train_fill_values = pd.Series(train_keys.map(district_month_median), index=train_output.index)
+            valid_fill_values = pd.Series(valid_keys.map(district_month_median), index=valid_output.index)
+            train_filled = train_filled.fillna(train_fill_values)
+            valid_filled = valid_filled.fillna(valid_fill_values)
+
+        global_median = train_numeric.median(skipna=True)
+        if pd.notna(global_median):
+            train_filled = train_filled.fillna(float(global_median))
+            valid_filled = valid_filled.fillna(float(global_median))
+
+        train_output[column] = train_filled
+        valid_output[column] = valid_filled
+
+    return train_output, valid_output
+
+
+def _build_future_case_series(
+    *,
+    case_series: pd.Series,
+    district_series: pd.Series,
+    temporal_series: pd.Series | None,
+) -> pd.Series:
+    working = pd.DataFrame(
+        {
+            "cases": pd.to_numeric(case_series, errors="coerce"),
+            "district": district_series,
+        },
+        index=case_series.index,
+    )
+    if temporal_series is not None:
+        working["date"] = pd.to_datetime(temporal_series, errors="coerce")
+    else:
+        working["date"] = pd.NaT
+
+    working["_order"] = np.arange(len(working), dtype=int)
+    working = working.sort_values(["district", "date", "_order"], na_position="last")
+    working["future_cases"] = working.groupby("district", dropna=False)["cases"].shift(-1)
+    restored = working.sort_values("_order")["future_cases"]
+    restored.index = case_series.index
+    return pd.to_numeric(restored, errors="coerce")
+
+
+def _derive_fold_targets_from_train_threshold(
+    *,
+    case_series: pd.Series,
+    district_series: pd.Series,
+    future_case_series: pd.Series,
+    train_positions: np.ndarray,
+    valid_positions: np.ndarray,
+    selected_percentile: int,
+) -> tuple[pd.Series, pd.Series]:
+    q = float(selected_percentile) / 100.0
+    train_case = pd.to_numeric(case_series.iloc[train_positions], errors="coerce")
+    train_district = district_series.iloc[train_positions]
+    valid_district = district_series.iloc[valid_positions]
+
+    train_threshold = train_case.groupby(train_district, dropna=False).quantile(q)
+    train_threshold_values = train_district.map(train_threshold)
+    valid_threshold_values = valid_district.map(train_threshold)
+
+    train_future = pd.to_numeric(future_case_series.iloc[train_positions], errors="coerce")
+    valid_future = pd.to_numeric(future_case_series.iloc[valid_positions], errors="coerce")
+
+    y_train = (
+        (train_future > pd.to_numeric(train_threshold_values, errors="coerce"))
+        & train_future.notna()
+        & pd.to_numeric(train_threshold_values, errors="coerce").notna()
+    ).astype(int)
+    y_valid = (
+        (valid_future > pd.to_numeric(valid_threshold_values, errors="coerce"))
+        & valid_future.notna()
+        & pd.to_numeric(valid_threshold_values, errors="coerce").notna()
+    ).astype(int)
+    return y_train, y_valid
+
+
 def train_baselines(
     X: pd.DataFrame,
     y: pd.Series,
@@ -81,6 +204,12 @@ def train_baselines(
     config: BaselineTrainingConfig = BaselineTrainingConfig(),
     cv_config: TimeSeriesCVConfig | None = None,
     output_dir: Path | None = None,
+    case_series: pd.Series | None = None,
+    district_series: pd.Series | None = None,
+    temporal_series: pd.Series | None = None,
+    selected_percentile: int = 75,
+    fold_local_labeling: bool = True,
+    fold_local_climate_imputation: bool = True,
     build_fold_ledger_fn: Callable[[pd.DataFrame, TimeSeriesCVConfig], list[dict[str, Any]]] = build_fold_ledger,
     generate_time_splits_fn: Callable[[pd.DataFrame, TimeSeriesCVConfig], Any] = generate_time_splits,
 ) -> dict[str, BaselineModel]:
@@ -106,6 +235,25 @@ def train_baselines(
     cv_metrics_records: list[dict[str, float | int | str]] = []
     fold_ledger = build_fold_ledger_fn(training_frame, cv_cfg)
     (output_root / "fold_ledger.json").write_text(json.dumps(fold_ledger, indent=2), encoding="utf-8")
+    case_ref = pd.Series(case_series.to_numpy(), index=X.index) if case_series is not None and len(case_series) == len(X) else None
+    district_ref = pd.Series(district_series.to_numpy(), index=X.index) if district_series is not None and len(district_series) == len(X) else None
+    temporal_ref = (
+        pd.Series(temporal_series.to_numpy(), index=X.index)
+        if temporal_series is not None and len(temporal_series) == len(X)
+        else None
+    )
+    fold_future_cases: pd.Series | None = None
+    if (
+        fold_local_labeling
+        and case_ref is not None
+        and district_ref is not None
+    ):
+        fold_future_cases = _build_future_case_series(
+            case_series=case_ref,
+            district_series=district_ref,
+            temporal_series=temporal_ref,
+        )
+
     if config.enable_temporal_cv:
         for fold_id, (train_idx, valid_idx) in enumerate(generate_time_splits_fn(training_frame, cv_cfg), start=1):
             fold_dir = output_root / f"fold_{fold_id}"
@@ -115,9 +263,23 @@ def train_baselines(
             valid_positions = np.asarray(valid_idx, dtype=int)
 
             X_train = X.iloc[train_positions]
-            y_train = y.iloc[train_positions]
             X_valid = X.iloc[valid_positions]
+            y_train = y.iloc[train_positions]
             y_valid = y.iloc[valid_positions]
+
+            if fold_local_climate_imputation:
+                X_train, X_valid = _impute_fold_climate_features(X_train, X_valid)
+
+            if fold_future_cases is not None:
+                y_train, y_valid = _derive_fold_targets_from_train_threshold(
+                    case_series=case_ref,
+                    district_series=district_ref,
+                    future_case_series=fold_future_cases,
+                    train_positions=train_positions,
+                    valid_positions=valid_positions,
+                    selected_percentile=int(selected_percentile),
+                )
+
             valid_index = X.index.take(valid_positions)
 
             if pd.to_numeric(y_train, errors="coerce").dropna().nunique() <= 1:

@@ -66,7 +66,7 @@ def optimal_action_threshold(cost: float, loss: float) -> float:
         raise ValueError("cost must be >= 0")
     if loss <= 0:
         raise ValueError("loss must be > 0")
-    return min(max(cost / loss, 0.0), 1.0)
+    return min(max(cost / (cost + loss), 0.0), 1.0)
 
 
 def recommend_action(probabilities: pd.Series, cost: float, loss: float) -> pd.Series:

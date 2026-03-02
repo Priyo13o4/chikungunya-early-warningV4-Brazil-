@@ -655,7 +655,7 @@ class HierarchicalBayesianModel:
                     mu=0.85,
                     sigma=0.15,
                     lower=0.0,
-                    upper=0.995,
+                    upper=0.999,
                 )
                 sigma_z_state = pm.HalfNormal("sigma_z_state", sigma=0.25)
                 u_init_s = pm.Normal("u_init_s", mu=0.0, sigma=1.0, dims="state")
@@ -774,7 +774,7 @@ class HierarchicalBayesianModel:
                     mu=0.85,
                     sigma=0.15,
                     lower=0.0,
-                    upper=0.995,
+                    upper=0.999,
                 )
                 sigma_z_state = pm.HalfNormal("sigma_z_state", sigma=0.25)
                 u_init_s = pm.Normal("u_init_s", mu=0.0, sigma=1.0, dims="state")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 from src.feature_engineering.build_feature_matrix import build_feature_matrix
+from src.feature_engineering.mechanistic_features import build_mechanistic_features
 from src.feature_engineering.spatial_features import build_spatial_features
 from src.feature_engineering.temporal_features import build_temporal_features
 
@@ -114,3 +115,25 @@ def test_profile_without_climate_sources_does_not_create_mechanistic_climate_fea
     assert "rainfall_4wk" not in features.columns
     assert "lai_anomaly" not in features.columns
     assert "temp_rain_interaction" not in features.columns
+
+
+def test_mechanistic_climate_features_are_lagged_by_one_week() -> None:
+    df = pd.DataFrame(
+        {
+            "date": ["2025-01-01", "2025-01-08", "2025-01-15"],
+            "district": ["A", "A", "A"],
+            "temperature": [20.0, 21.0, 22.0],
+            "rainfall": [1.0, 10.0, 1000.0],
+        }
+    )
+
+    features = build_mechanistic_features(df)
+
+    assert pd.isna(features.loc[0, "temp_celsius"])
+    assert features.loc[1, "temp_celsius"] == 20.0
+    assert features.loc[2, "temp_celsius"] == 21.0
+    assert pd.isna(features.loc[0, "rainfall_4wk"])
+    assert features.loc[1, "rainfall_4wk"] == 1.0
+    assert features.loc[2, "rainfall_4wk"] == 11.0
+    assert pd.isna(features.loc[0, "temp_rain_interaction"])
+    assert features.loc[1, "temp_rain_interaction"] == 20.0

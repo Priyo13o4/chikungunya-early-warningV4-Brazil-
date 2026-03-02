@@ -28,6 +28,7 @@ _BAYESIAN_OOF_HARD_FAIL_MARKERS: tuple[str, ...] = (
     "pipeline must provide the configured bayesian covariate set explicitly",
 )
 _SUPPORTED_OOF_EXECUTION_MODES: set[str] = {"legacy", "simplified", "conditional"}
+_CLIMATE_COLUMN_TOKENS: tuple[str, ...] = ("rain", "temp", "humid", "precip", "climate", "lai")
 
 
 def _fmt_log_metric(value: Any, *, digits: int = 3) -> str:
@@ -67,6 +68,125 @@ def _extract_sampler_tail_metrics(idata: Any | None) -> dict[str, float | None]:
         "step_size_mean": _mean_for(("step_size", "step_size_bar")),
         "energy_mean": _mean_for(("energy",)),
     }
+
+
+def _infer_climate_feature_columns(columns: list[str]) -> list[str]:
+    selected: list[str] = []
+    for column in columns:
+        lowered = str(column).lower()
+        if any(token in lowered for token in _CLIMATE_COLUMN_TOKENS):
+            selected.append(str(column))
+    return sorted(set(selected))
+
+
+def _impute_fold_climate_features(
+    train_df: pd.DataFrame,
+    valid_df: pd.DataFrame,
+    *,
+    district_column: str = "district",
+    month_column: str = "month",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    climate_columns = [column for column in _infer_climate_feature_columns(train_df.columns.tolist()) if column in valid_df.columns]
+    if not climate_columns:
+        return train_df, valid_df
+
+    train_output = train_df.copy()
+    valid_output = valid_df.copy()
+    has_group_keys = district_column in train_output.columns and month_column in train_output.columns and month_column in valid_output.columns
+    if has_group_keys:
+        train_month = pd.to_numeric(train_output[month_column], errors="coerce")
+        valid_month = pd.to_numeric(valid_output[month_column], errors="coerce")
+
+    for column in climate_columns:
+        train_numeric = pd.to_numeric(train_output[column], errors="coerce")
+        valid_numeric = pd.to_numeric(valid_output[column], errors="coerce")
+        train_filled = train_numeric.copy()
+        valid_filled = valid_numeric.copy()
+
+        if has_group_keys:
+            reference = pd.DataFrame(
+                {
+                    "district": train_output[district_column],
+                    "month": train_month,
+                    "value": train_numeric,
+                }
+            )
+            district_month_median = reference.groupby(["district", "month"], dropna=False)["value"].median()
+            train_keys = pd.MultiIndex.from_arrays([train_output[district_column], train_month])
+            valid_keys = pd.MultiIndex.from_arrays([valid_output[district_column], valid_month])
+            train_fill_values = pd.Series(train_keys.map(district_month_median), index=train_output.index)
+            valid_fill_values = pd.Series(valid_keys.map(district_month_median), index=valid_output.index)
+            train_filled = train_filled.fillna(train_fill_values)
+            valid_filled = valid_filled.fillna(valid_fill_values)
+
+        global_median = train_numeric.median(skipna=True)
+        if pd.notna(global_median):
+            train_filled = train_filled.fillna(float(global_median))
+            valid_filled = valid_filled.fillna(float(global_median))
+
+        train_output[column] = train_filled
+        valid_output[column] = valid_filled
+
+    return train_output, valid_output
+
+
+def _build_future_case_series(
+    *,
+    case_series: pd.Series,
+    district_series: pd.Series,
+    temporal_series: pd.Series | None,
+) -> pd.Series:
+    working = pd.DataFrame(
+        {
+            "cases": pd.to_numeric(case_series, errors="coerce"),
+            "district": district_series,
+        },
+        index=case_series.index,
+    )
+    if temporal_series is not None:
+        working["date"] = pd.to_datetime(temporal_series, errors="coerce")
+    else:
+        working["date"] = pd.NaT
+    working["_order"] = np.arange(len(working), dtype=int)
+    working = working.sort_values(["district", "date", "_order"], na_position="last")
+    working["future_cases"] = working.groupby("district", dropna=False)["cases"].shift(-1)
+    restored = working.sort_values("_order")["future_cases"]
+    restored.index = case_series.index
+    return pd.to_numeric(restored, errors="coerce")
+
+
+def _derive_fold_targets_from_train_threshold(
+    *,
+    case_series: pd.Series,
+    district_series: pd.Series,
+    future_case_series: pd.Series,
+    train_index: pd.Index,
+    valid_index: pd.Index,
+    selected_percentile: int,
+) -> tuple[pd.Series, pd.Series]:
+    q = float(selected_percentile) / 100.0
+    train_case = pd.to_numeric(case_series.loc[train_index], errors="coerce")
+    train_district = district_series.loc[train_index]
+    valid_district = district_series.loc[valid_index]
+
+    train_threshold = train_case.groupby(train_district, dropna=False).quantile(q)
+    train_threshold_values = train_district.map(train_threshold)
+    valid_threshold_values = valid_district.map(train_threshold)
+
+    train_future = pd.to_numeric(future_case_series.loc[train_index], errors="coerce")
+    valid_future = pd.to_numeric(future_case_series.loc[valid_index], errors="coerce")
+
+    y_train = (
+        (train_future > pd.to_numeric(train_threshold_values, errors="coerce"))
+        & train_future.notna()
+        & pd.to_numeric(train_threshold_values, errors="coerce").notna()
+    ).astype(int)
+    y_valid = (
+        (valid_future > pd.to_numeric(valid_threshold_values, errors="coerce"))
+        & valid_future.notna()
+        & pd.to_numeric(valid_threshold_values, errors="coerce").notna()
+    ).astype(int)
+    return y_train, y_valid
 
 
 def _log_bayesian_fit_completion(
@@ -537,6 +657,11 @@ def collect_bayesian_oof_scores(
     compute_backend_effective: str = "cpu",
     date_column: str = "date",
     target_column: str = "outbreak_label",
+    district_series: pd.Series | None = None,
+    temporal_series: pd.Series | None = None,
+    selected_percentile: int = 75,
+    apply_fold_local_labeling: bool = True,
+    apply_fold_local_climate_imputation: bool = True,
     generate_time_splits_fn: Callable[[pd.DataFrame, TimeSeriesCVConfig], Any] = generate_time_splits,
     return_fold_diagnostics: bool = False,
 ) -> pd.Series | tuple[pd.Series, dict[str, Any]]:
@@ -574,6 +699,17 @@ def collect_bayesian_oof_scores(
     cv_frame[cv_effective.target_column] = pd.to_numeric(outbreak_target, errors="coerce").fillna(0).astype(int)
     requested_covariates = list(resolve_bayesian_climate_covariates(bayesian_settings=bayesian_settings))
 
+    case_ref = count_target.reindex(features_df.index)
+    district_ref = district_series.reindex(features_df.index) if district_series is not None else None
+    temporal_ref = temporal_series.reindex(features_df.index) if temporal_series is not None else None
+    fold_future_cases: pd.Series | None = None
+    if apply_fold_local_labeling and district_ref is not None:
+        fold_future_cases = _build_future_case_series(
+            case_series=case_ref,
+            district_series=district_ref,
+            temporal_series=temporal_ref,
+        )
+
     try:
         split_iterator = generate_time_splits_fn(cv_frame, cv_effective)
     except Exception as split_error:
@@ -595,11 +731,29 @@ def collect_bayesian_oof_scores(
     for fold_number, (train_idx, valid_idx) in enumerate(split_iterator, start=1):
         y_train_binary = pd.to_numeric(outbreak_target.loc[train_idx], errors="coerce").fillna(0).astype(int)
         y_train_counts = pd.to_numeric(count_target.loc[train_idx], errors="coerce").fillna(0.0)
+        y_valid_binary = pd.to_numeric(outbreak_target.loc[valid_idx], errors="coerce").fillna(0).astype(int)
+
+        if fold_future_cases is not None and district_ref is not None:
+            y_train_binary, y_valid_binary = _derive_fold_targets_from_train_threshold(
+                case_series=case_ref,
+                district_series=district_ref,
+                future_case_series=fold_future_cases,
+                train_index=pd.Index(train_idx),
+                valid_index=pd.Index(valid_idx),
+                selected_percentile=int(selected_percentile),
+            )
+
         if y_train_binary.nunique(dropna=True) <= 1:
             continue
         try:
             fold_train_features = features_df.loc[train_idx]
             fold_valid_features = features_df.loc[valid_idx]
+
+            if apply_fold_local_climate_imputation:
+                fold_train_features, fold_valid_features = _impute_fold_climate_features(
+                    fold_train_features,
+                    fold_valid_features,
+                )
 
             train_selection = select_bayesian_covariates_by_availability(
                 frame=fold_train_features,
@@ -1019,6 +1173,11 @@ def run_bayesian_phase(
                 supports_generate_time_splits = "generate_time_splits_fn" in collect_oof_signature.parameters
                 supports_compute_backend = "compute_backend_effective" in collect_oof_signature.parameters
                 supports_fold_diagnostics = "return_fold_diagnostics" in collect_oof_signature.parameters
+                supports_district_series = "district_series" in collect_oof_signature.parameters
+                supports_temporal_series = "temporal_series" in collect_oof_signature.parameters
+                supports_selected_percentile = "selected_percentile" in collect_oof_signature.parameters
+                supports_fold_local_labeling = "apply_fold_local_labeling" in collect_oof_signature.parameters
+                supports_fold_local_imputation = "apply_fold_local_climate_imputation" in collect_oof_signature.parameters
 
                 base_oof_kwargs: dict[str, Any] = {
                     "features_df": subset_model_input_df,
@@ -1034,6 +1193,16 @@ def run_bayesian_phase(
                     base_oof_kwargs["generate_time_splits_fn"] = cv_split_callable
                 if supports_compute_backend:
                     base_oof_kwargs["compute_backend_effective"] = bayesian_compute_backend_effective
+                if supports_district_series:
+                    base_oof_kwargs["district_series"] = district_index.loc[subset_index] if district_index is not None else None
+                if supports_temporal_series:
+                    base_oof_kwargs["temporal_series"] = temporal_index.loc[subset_index] if temporal_index is not None else None
+                if supports_selected_percentile:
+                    base_oof_kwargs["selected_percentile"] = 75
+                if supports_fold_local_labeling:
+                    base_oof_kwargs["apply_fold_local_labeling"] = True
+                if supports_fold_local_imputation:
+                    base_oof_kwargs["apply_fold_local_climate_imputation"] = True
 
                 LOGGER.info(
                     "Bayesian OOF start: requested_mode=%s pass1_mode=%s rerun_if_no_ess_improvement=%s convergence_mode=%s sampler(draws=%d,tune=%d,chains=%d,target_accept=%.3f,max_treedepth=%d,retries=%d,simplified=%s) backend=%s",

@@ -1,7 +1,16 @@
 {
-  "input_feature_count": 42,
-  "output_feature_count": 42,
-  "dropped_forbidden_columns": [],
+  "input_feature_count": 32,
+  "output_feature_count": 24,
+  "dropped_forbidden_columns": [
+    "cases",
+    "outbreak_label",
+    "outbreak_label_p70",
+    "outbreak_label_p75",
+    "outbreak_label_p80",
+    "threshold_p70",
+    "threshold_p75",
+    "threshold_p80"
+  ],
   "forbidden_patterns": [
     "^outbreak_label$",
     "^outbreak_label_.*$",

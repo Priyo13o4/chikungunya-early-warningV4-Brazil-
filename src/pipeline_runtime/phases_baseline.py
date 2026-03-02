@@ -368,6 +368,18 @@ def run_baseline_phase(
             baseline_train_kwargs["build_fold_ledger_fn"] = cv_ledger_callable
         if "generate_time_splits_fn" in train_signature.parameters:
             baseline_train_kwargs["generate_time_splits_fn"] = cv_split_callable
+        if "case_series" in train_signature.parameters:
+            baseline_train_kwargs["case_series"] = bayesian_count_target
+        if "district_series" in train_signature.parameters:
+            baseline_train_kwargs["district_series"] = district_index
+        if "temporal_series" in train_signature.parameters:
+            baseline_train_kwargs["temporal_series"] = temporal_index
+        if "selected_percentile" in train_signature.parameters:
+            baseline_train_kwargs["selected_percentile"] = int(selected_percentile)
+        if "fold_local_labeling" in train_signature.parameters:
+            baseline_train_kwargs["fold_local_labeling"] = True
+        if "fold_local_climate_imputation" in train_signature.parameters:
+            baseline_train_kwargs["fold_local_climate_imputation"] = True
         baseline_models = train_baselines_fn(
             model_input_df,
             target,

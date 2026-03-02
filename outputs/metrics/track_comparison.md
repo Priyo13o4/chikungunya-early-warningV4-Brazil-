@@ -1,0 +1,5 @@
+# Track Comparison
+
+| metric | baseline | bayesian | delta | status | reason | run_id |
+|---|---:|---:|---:|---|---|---|
+| headline_comparison |  |  |  | suppressed | degraded_run_or_missing_track_metrics | 20260302T115919Z-5564bb82 |

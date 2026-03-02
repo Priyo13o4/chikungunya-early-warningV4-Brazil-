@@ -201,6 +201,45 @@ def summarize_diagnostics(idata: Any | None = None) -> dict[str, float]:
     }
 
 
+def log_worst_parameters(idata: Any, top_n: int = 10) -> None:
+    """Log parameters with worst ESS and R-hat to trace convergence bottlenecks."""
+    az = _try_import_arviz()
+    if az is None:
+        LOGGER.warning("Worst-parameter diagnostics skipped: optional dependency 'arviz' not available.")
+        return
+
+    try:
+        summary_df = az.summary(idata, round_to=2)
+    except Exception as diagnostics_error:
+        LOGGER.warning("Worst-parameter diagnostics skipped: unable to build ArviZ summary (%s)", diagnostics_error)
+        return
+
+    if summary_df.empty:
+        LOGGER.info("DIAGNOSTIC TRACE: no posterior parameters available for ESS/R-hat ranking")
+        return
+
+    ranked_by_ess = summary_df.sort_values(by="ess_bulk", ascending=True).head(int(top_n))
+    ranked_by_rhat = summary_df.sort_values(by="r_hat", ascending=False).head(int(top_n))
+
+    LOGGER.info("DIAGNOSTIC TRACE: BOTTOM %d ESS PARAMETERS", int(top_n))
+    for parameter_name, row in ranked_by_ess.iterrows():
+        LOGGER.info(
+            "param=%s ess_bulk=%.2f r_hat=%.4f",
+            str(parameter_name),
+            float(row.get("ess_bulk", np.nan)),
+            float(row.get("r_hat", np.nan)),
+        )
+
+    LOGGER.info("DIAGNOSTIC TRACE: TOP %d R-HAT PARAMETERS", int(top_n))
+    for parameter_name, row in ranked_by_rhat.iterrows():
+        LOGGER.info(
+            "param=%s r_hat=%.4f ess_bulk=%.2f",
+            str(parameter_name),
+            float(row.get("r_hat", np.nan)),
+            float(row.get("ess_bulk", np.nan)),
+        )
+
+
 def check_convergence(
     idata: Any,
     *,
@@ -225,6 +264,7 @@ def check_convergence(
             summary["r_hat_max"],
             summary["ess_min"],
         )
+        log_worst_parameters(idata, top_n=10)
     return {
         "converged": converged,
         "divergence_threshold": float(divergence_threshold),

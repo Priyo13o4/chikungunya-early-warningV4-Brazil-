@@ -137,6 +137,10 @@ def build_mechanistic_features(
         LOGGER.warning("No temperature column found; skipping temperature-derived mechanistic features")
     else:
         temp_values = pd.to_numeric(output[temp_column], errors="coerce")
+        if district_column in output.columns:
+            temp_values = temp_values.groupby(output[district_column], dropna=False).shift(1)
+        else:
+            temp_values = temp_values.shift(1)
         inferred_units = _infer_temperature_units(temp_values, temp_column)
         if inferred_units == "kelvin":
             output["temp_kelvin"] = temp_values
@@ -198,14 +202,19 @@ def build_mechanistic_features(
             LOGGER.warning("Missing date column '%s'; rainfall_4wk will use row order within district", date_column)
         output = output.sort_values(sort_keys).copy()
         rain_numeric = pd.to_numeric(output[rainfall_column], errors="coerce")
+        rain_lagged = rain_numeric.groupby(output[district_column], dropna=False).shift(1)
         output["rainfall_4wk"] = rain_numeric.groupby(output[district_column], dropna=False).transform(
-            lambda series: series.rolling(window=4, min_periods=1).sum()
+            lambda series: series.shift(1).rolling(window=4, min_periods=1).sum()
         )
 
     if lai_column is None:
         LOGGER.warning("No LAI column found; skipping lai_anomaly")
     else:
         lai_numeric = pd.to_numeric(output[lai_column], errors="coerce")
+        if district_column in output.columns:
+            lai_numeric = lai_numeric.groupby(output[district_column], dropna=False).shift(1)
+        else:
+            lai_numeric = lai_numeric.shift(1)
         if district_column in output.columns:
             lai_mean = lai_numeric.groupby([output[district_column], output["season"]], dropna=False).transform("mean")
             output["lai_anomaly"] = lai_numeric - lai_mean
@@ -215,7 +224,7 @@ def build_mechanistic_features(
 
     if temp_column is not None and rainfall_column is not None:
         output["temp_rain_interaction"] = pd.to_numeric(output["temp_celsius"], errors="coerce") * pd.to_numeric(
-            output[rainfall_column],
+            rain_lagged if 'rain_lagged' in locals() else output[rainfall_column],
             errors="coerce",
         )
 

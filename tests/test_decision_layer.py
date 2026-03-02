@@ -52,4 +52,4 @@ def test_optimize_decision_threshold_uses_grid_and_fallback_by_sample_size() -> 
     )
     assert fallback["optimized"] is False
     assert fallback["method"] == "fallback_cost_loss_ratio"
-    assert abs(float(fallback["threshold"]) - 0.2) < 1e-9
+    assert abs(float(fallback["threshold"]) - (0.2 / 1.2)) < 1e-9
