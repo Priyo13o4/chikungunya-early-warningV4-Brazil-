@@ -651,7 +651,7 @@ class HierarchicalBayesianModel:
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
                 rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.45)
-                rho = pm.Deterministic("rho", 0.90 * pm.math.tanh(rho_raw))
+                rho = pm.Deterministic("rho", 0.99 * pm.math.tanh(rho_raw))
                 sigma_z_state = pm.HalfNormal("sigma_z_state", sigma=0.25)
                 u_init_s = pm.Normal("u_init_s", mu=0.0, sigma=1.0, dims="state")
                 z_innov_s = pm.Normal("z_innov_s", mu=0.0, sigma=1.0, dims=("state", "time_inner"))
@@ -765,7 +765,7 @@ class HierarchicalBayesianModel:
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
                 rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.45)
-                rho = pm.Deterministic("rho", 0.90 * pm.math.tanh(rho_raw))
+                rho = pm.Deterministic("rho", 0.99 * pm.math.tanh(rho_raw))
                 sigma_z_state = pm.HalfNormal("sigma_z_state", sigma=0.25)
                 u_init_s = pm.Normal("u_init_s", mu=0.0, sigma=1.0, dims="state")
                 z_innov_s = pm.Normal("z_innov_s", mu=0.0, sigma=1.0, dims=("state", "time_inner"))
@@ -944,7 +944,7 @@ class HierarchicalBayesianModel:
 
         if "rho" in posterior:
             rho_mean = float(posterior["rho"].mean().item())
-            if abs(rho_mean) > 0.89:
+            if abs(rho_mean) > 0.98:
                 LOGGER.warning("Posterior mean rho is near AR(1) boundary: rho=%.4f", rho_mean)
 
         if simplified_mode:

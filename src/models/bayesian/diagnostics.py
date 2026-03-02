@@ -42,12 +42,31 @@ def extract_rhat_ess(idata: Any) -> pd.DataFrame:
     rhat_ds = az.rhat(idata)
     ess_ds = az.ess(idata, method="bulk")
 
-    rhat_series = rhat_ds.to_array().to_series()
-    ess_series = ess_ds.to_array().to_series()
-    diagnostics = pd.DataFrame({"r_hat": rhat_series, "ess_bulk": ess_series})
-    diagnostics.index = diagnostics.index.map(lambda item: "|".join(str(part) for part in item))
-    diagnostics = diagnostics.reset_index().rename(columns={"index": "parameter"})
-    return diagnostics.sort_values("parameter").reset_index(drop=True)
+    def _dataset_metric_to_parameter_map(dataset: Any) -> dict[str, float]:
+        metric_values: dict[str, float] = {}
+        for var_name, data_array in dataset.data_vars.items():
+            if int(getattr(data_array, "ndim", 0)) == 0:
+                scalar_value = np.asarray(data_array.to_numpy(), dtype=float).item()
+                metric_values[str(var_name)] = float(scalar_value)
+                continue
+
+            series = data_array.to_series()
+            for index_key, metric_value in series.items():
+                if isinstance(index_key, tuple):
+                    path_parts = (str(var_name), *(str(part) for part in index_key))
+                else:
+                    path_parts = (str(var_name), str(index_key))
+                metric_values["|".join(path_parts)] = float(metric_value)
+        return metric_values
+
+    rhat_values = _dataset_metric_to_parameter_map(rhat_ds)
+    ess_values = _dataset_metric_to_parameter_map(ess_ds)
+
+    parameters = sorted(set(rhat_values.keys()) | set(ess_values.keys()))
+    diagnostics = pd.DataFrame({"parameter": parameters})
+    diagnostics["r_hat"] = diagnostics["parameter"].map(rhat_values)
+    diagnostics["ess_bulk"] = diagnostics["parameter"].map(ess_values)
+    return diagnostics.reset_index(drop=True)
 
 
 def _resolve_parameter_group(parameter_name: str) -> str:
