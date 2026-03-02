@@ -650,8 +650,13 @@ class HierarchicalBayesianModel:
                 z_state_values = np.zeros((len(states), len(times)), dtype=float)
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
-                rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.45)
-                rho = pm.Deterministic("rho", 0.99 * pm.math.tanh(rho_raw))
+                rho = pm.TruncatedNormal(
+                    "rho",
+                    mu=0.85,
+                    sigma=0.15,
+                    lower=0.0,
+                    upper=0.995,
+                )
                 sigma_z_state = pm.HalfNormal("sigma_z_state", sigma=0.25)
                 u_init_s = pm.Normal("u_init_s", mu=0.0, sigma=1.0, dims="state")
                 z_innov_s = pm.Normal("z_innov_s", mu=0.0, sigma=1.0, dims=("state", "time_inner"))
@@ -764,8 +769,13 @@ class HierarchicalBayesianModel:
                 z_state_values = np.zeros((len(states), len(times)), dtype=float)
                 linear = alpha_district[district_idx] + pm.math.dot(feature_matrix_scaled, beta)
             else:
-                rho_raw = pm.Normal("rho_raw", mu=0.0, sigma=0.45)
-                rho = pm.Deterministic("rho", 0.99 * pm.math.tanh(rho_raw))
+                rho = pm.TruncatedNormal(
+                    "rho",
+                    mu=0.85,
+                    sigma=0.15,
+                    lower=0.0,
+                    upper=0.995,
+                )
                 sigma_z_state = pm.HalfNormal("sigma_z_state", sigma=0.25)
                 u_init_s = pm.Normal("u_init_s", mu=0.0, sigma=1.0, dims="state")
                 z_innov_s = pm.Normal("z_innov_s", mu=0.0, sigma=1.0, dims=("state", "time_inner"))
@@ -1071,45 +1081,6 @@ class HierarchicalBayesianModel:
 
         diagnostics_summary["simplified_mode"] = 1.0 if simplified_mode else 0.0
         diagnostics_summary["fallback"] = 0.0
-
-        should_retry_simple = (
-            not simplified_mode
-            and not self.config.force_full_bayesian
-            and self.config.max_convergence_retries > 0
-            and self._needs_simplification(diagnostics_summary)
-        )
-        if should_retry_simple:
-            LOGGER.warning(
-                "Bayesian diagnostics poor in full mode (divergences=%s, r_hat_max=%s, ess_min=%s). "
-                "Retrying with bayesian_simplified_mode=True (tradeoff: latent AR(1) temporal state removed for stability).",
-                diagnostics_summary.get("divergences"),
-                diagnostics_summary.get("r_hat_max"),
-                diagnostics_summary.get("ess_min"),
-            )
-            model, idata, z_state_values = self._fit_pymc_model(
-                pm=pm,
-                districts=districts,
-                states=states,
-                times=times,
-                district_idx=district_idx,
-                state_idx=state_idx,
-                time_idx=time_idx,
-                feature_matrix_scaled=feature_matrix_scaled,
-                observed=observed,
-                simplified_mode=True,
-            )
-            diagnostics_summary = self._extract_sampler_diagnostics(idata)
-            try:
-                from src.models.bayesian.diagnostics import summarize_diagnostics
-
-                convergence = summarize_diagnostics(idata)
-                diagnostics_summary["r_hat_max"] = float(convergence.get("r_hat_max", float("nan")))
-                diagnostics_summary["ess_min"] = float(convergence.get("ess_min", float("nan")))
-            except Exception:
-                pass
-            diagnostics_summary["simplified_mode"] = 1.0
-            diagnostics_summary["fallback"] = 0.0
-            simplified_mode = True
 
         self.model_ = model
         self._finalize_from_posterior(

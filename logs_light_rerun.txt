@@ -1,0 +1,36 @@
+2026-03-02 13:51:40,507 | src.pipeline_runtime.config_runtime | INFO | Adapter callable enabled for 'load_data': src.data_preprocessing.load_data:run
+2026-03-02 13:51:40,508 | src.pipeline_runtime.config_runtime | INFO | Adapter callable enabled for 'label_outbreaks': projects.brazil_chik.label_adapter:label_outbreaks
+2026-03-02 13:51:40,509 | src.pipeline_runtime.config_runtime | INFO | Adapter callable enabled for 'build_feature_matrix': projects.brazil_chik.feature_adapter:build_feature_matrix
+2026-03-02 13:51:40,510 | src.pipeline_runtime.config_runtime | INFO | Adapter callable enabled for 'build_fold_ledger': projects.brazil_chik.cv_adapter:build_fold_ledger
+2026-03-02 13:51:40,510 | src.pipeline_runtime.config_runtime | INFO | Adapter callable enabled for 'generate_time_splits': projects.brazil_chik.cv_adapter:generate_time_splits
+2026-03-02 13:51:40,511 | src.pipeline_runtime.config_runtime | WARNING | Invalid memory_optimization.mode 'false'; defaulting to 'off'
+2026-03-02 13:51:40,524 | __main__ | INFO | Phase: load
+2026-03-02 13:51:40,524 | src.data_preprocessing.load_data | INFO | Reading CSV from data/processed/brazil_chik_dataset_top300_final.csv
+2026-03-02 13:51:40,735 | src.data_preprocessing.load_data | INFO | Loaded Epiclim data from data/processed/brazil_chik_dataset_top300_final.csv with shape=(172200, 22)
+2026-03-02 13:51:40,736 | src.data_preprocessing.load_data | INFO | Population auto-discovery found no matching files in data/processed (keywords=census,indiastatedist,population, extensions=.csv,.xlsx,.xls)
+2026-03-02 13:51:40,736 | src.data_preprocessing.load_data | INFO | No census/population dataset provided or discovered; skipping census load
+2026-03-02 13:51:40,736 | __main__ | INFO | Phase: clean
+2026-03-02 13:51:40,736 | src.data_preprocessing.clean_data | INFO | Cleaning data with 172200 rows
+2026-03-02 13:51:40,761 | src.data_preprocessing.clean_data | INFO | Year filter 2019-2020 kept 31200/172200 rows
+2026-03-02 13:51:40,786 | src.data_preprocessing.clean_data | INFO | Finished cleaning with shape=(31200, 22)
+2026-03-02 13:51:40,786 | __main__ | INFO | Phase: impute
+2026-03-02 13:51:40,786 | src.data_preprocessing.impute_climate | INFO | Imputing climate variables
+2026-03-02 13:51:40,787 | __main__ | INFO | Phase: merge
+2026-03-02 13:51:40,787 | __main__ | INFO | No population data provided; merge phase completed with passthrough frame
+2026-03-02 13:51:40,808 | __main__ | INFO | Phase: labels
+2026-03-02 13:51:40,970 | __main__ | INFO | Phase: feature matrix
+2026-03-02 13:51:41,296 | src.pipeline_runtime.phases_baseline | INFO | Phase: baselines
+2026-03-02 13:51:41,304 | projects.brazil_chik.cv_adapter | INFO | Brazil CV fold mode=thesis_strict thesis_strict=True folds=5
+2026-03-02 13:51:41,314 | src.pipeline_runtime.phases_baseline | INFO | Baseline compute backend: macos_metal
+2026-03-02 13:51:41,319 | projects.brazil_chik.cv_adapter | INFO | Brazil CV fold mode=thesis_strict thesis_strict=True folds=5
+2026-03-02 13:51:41,352 | projects.brazil_chik.cv_adapter | INFO | Brazil CV fold mode=thesis_strict thesis_strict=True folds=5
+2026-03-02 13:51:48,330 | src.models.baselines.baseline_models | WARNING | Model 'xgboost' using constant fallback: xgboost unavailable (No module named 'xgboost')
+2026-03-02 13:51:48,437 | src.models.baselines.train_baselines | INFO | Trained 5 baseline models. Artifacts saved to /Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4/outputs/models/baselines
+2026-03-02 13:51:49,088 | src.pipeline_runtime.phases_bayesian | INFO | Phase: bayesian
+2026-03-02 13:51:49,090 | __main__ | INFO | Bayesian phase start: backend requested=auto, resolved=macos_metal, sampling_backend=auto, convergence_failure_mode=warn
+2026-03-02 13:51:51,685 | pytensor.tensor.blas | WARNING | Using NumPy C-API based implementation for BLAS functions.
+2026-03-02 13:51:52,337 | src.models.bayesian.hierarchical_model | INFO | Starting Bayesian sampling: obs=15288, districts=147, times=104, n_covariates=5, chains=2, draws=500, tune=500, target_accept=0.900, max_treedepth=10, simplified_mode=False, progressbar=False
+2026-03-02 13:52:48,820 | pymc.sampling.mcmc | INFO | Auto-assigning NUTS sampler...
+2026-03-02 13:52:48,820 | pymc.sampling.mcmc | INFO | Initializing NUTS using jitter+adapt_diag...
+2026-03-02 13:52:56,760 | pymc.sampling.mcmc | INFO | Multiprocess sampling (2 chains in 4 jobs)
+2026-03-02 13:52:56,760 | pymc.sampling.mcmc | INFO | NUTS: [mu_alpha, sigma_alpha, alpha_raw, beta, rho, sigma_z_state, u_init_s, z_innov_s, alpha_nb]

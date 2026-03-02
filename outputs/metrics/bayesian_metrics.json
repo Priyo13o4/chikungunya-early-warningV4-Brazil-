@@ -1,6 +1,0 @@
-{
-  "brier_score": 0.2,
-  "pr_auc": 0.6,
-  "roc_auc": 0.7,
-  "lead_time_mean": 1.0
-}

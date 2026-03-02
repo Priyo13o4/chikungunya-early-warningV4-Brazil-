@@ -1,7 +1,7 @@
 {
-  "run_id": "20260302T052014Z-b9905e9d",
+  "run_id": "20260302T082140Z-9d301ebc",
   "compute_backend_effective": "macos_metal",
-  "skip_baselines": true,
+  "skip_baselines": false,
   "model_names": [
     "rule_based_threshold",
     "logistic_regression",
