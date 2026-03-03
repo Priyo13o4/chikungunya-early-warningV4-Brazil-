@@ -32,6 +32,6 @@
     "random_forest",
     "xgboost"
   ],
-  "n_rows": 15288,
-  "target_positive_rate": 0.1292517006802721
+  "n_rows": 84378,
+  "target_positive_rate": 0.14733698357391736
 }

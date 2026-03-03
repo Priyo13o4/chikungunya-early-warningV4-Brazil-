@@ -26,8 +26,8 @@ python run_pipeline.py \
   --raw-data data/processed/brazil_chik_dataset_top300_final.csv \
   --start-year 2015 \
   --end-year 2025 \
-  --bayesian-profile-mode cv \
   --skip-visualizations \
+  --bayesian-progress \
   --no-strict-feature-gate \
   --log-level INFO \
   2>&1 | tee logs.txt

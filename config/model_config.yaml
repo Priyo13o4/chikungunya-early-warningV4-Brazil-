@@ -60,10 +60,10 @@ bayesian_model_profiles:
   # Still moderate for fullfit while remaining testing-friendly.
   final:
     chains: 3
-    tune: 1000
-    draws: 1000
-    target_accept: 0.95
-    max_treedepth: 12
+    tune: 200
+    draws: 200
+    target_accept: 0.85
+    max_treedepth: 8
     bayesian_progress: false
   # Minimal smoke/dev profile.
   dev:
