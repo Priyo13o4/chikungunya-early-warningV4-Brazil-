@@ -1,0 +1,38 @@
+{
+  "baseline_config": {
+    "date_column": "date",
+    "output_subdir": "baselines",
+    "random_state": 42,
+    "compute_backend": "nvidia_cuda",
+    "enable_temporal_cv": true,
+    "calibration_method": "isotonic"
+  },
+  "cv_config": {
+    "date_column": "date",
+    "target_column": "outbreak_label",
+    "start_train_year": 2015,
+    "first_valid_year": 2016,
+    "last_valid_year": 2020,
+    "train_window_years": 4,
+    "thesis_strict": true,
+    "thesis_strict_mode": "rolling",
+    "skip_single_class_folds": true,
+    "minimum_evaluated_folds": 3,
+    "min_outbreak_count_per_fold": 1,
+    "min_class_ratio_per_fold": 0.0,
+    "max_class_ratio_per_fold": 1.0,
+    "min_municipality_count_per_fold": 1,
+    "min_train_span_years": 1,
+    "fail_on_gate_violation": true
+  },
+  "cv_fold_ledger_path": "/home/priyodip/chikungunya-early-warningV4-Brazil-/outputs/models/baselines/fold_ledger.json",
+  "models": [
+    "rule_based_threshold",
+    "logistic_regression",
+    "poisson_regression",
+    "random_forest",
+    "xgboost"
+  ],
+  "n_rows": 84378,
+  "target_positive_rate": 0.14733698357391736
+}

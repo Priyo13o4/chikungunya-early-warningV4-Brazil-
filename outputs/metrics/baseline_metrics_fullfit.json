@@ -1,6 +1,12 @@
 {
-  "run_id": "20260302T115919Z-5564bb82",
-  "track": "baseline_fullfit",
-  "suppressed": true,
-  "reason": "baseline_not_available"
+  "accuracy": 0.9179999525942781,
+  "precision": 0.9179681576952237,
+  "recall": 0.48696911196911197,
+  "f1": 0.6363588584642876,
+  "kappa": 0.5949922850448164,
+  "false_alarm_rate": 0.0075195285352903565,
+  "roc_auc": 0.9247759288023861,
+  "pr_auc": 0.7965363978640417,
+  "lead_time_mean": 0.8298475717830557,
+  "lead_time_utility": 0.6263736263736264
 }

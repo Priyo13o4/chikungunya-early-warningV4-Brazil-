@@ -62,15 +62,19 @@ tmp/
 secrets/
 
 # Data and generated outputs (do not track large or derived files)
+# keep data folders ignored
 /data/raw/
 /data/processed/
 /data/external/
 /data/features/
-/outputs/models/
 
-# Saved models and training artifacts
-/models/
-/outputs/models/
+# Ignore only very large model artifacts (keep smaller model files tracked)
+# Large trained model pickles created by baseline runs
+outputs/models/baselines/*/random_forest.pkl
+outputs/models/baselines/final/random_forest.pkl
+
+# Saved models and training artifacts (specific large files only)
+# (previously a broad /models/ ignore — removed to allow tracking small files)
 
 # Compiled extensions
 *.so
