@@ -37,6 +37,7 @@ import json
 import logging
 from pathlib import Path
 import re
+from time import perf_counter
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -702,6 +703,25 @@ def run(
     """Execute pipeline stages in the required end-to-end order."""
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{uuid4().hex[:8]}"
     run_started_at = datetime.now(timezone.utc).isoformat()
+    run_started_perf = perf_counter()
+
+    phase_starts: dict[str, float] = {}
+
+    def _phase_context_suffix(**context: Any) -> str:
+        if not context:
+            return ""
+        rendered = ", ".join(f"{key}={value}" for key, value in context.items())
+        return f" | {rendered}"
+
+    def _phase_start(name: str, **context: Any) -> None:
+        phase_starts[name] = perf_counter()
+        LOGGER.info("Phase[%s] START%s", name, _phase_context_suffix(**context))
+
+    def _phase_end(name: str, **context: Any) -> None:
+        started_at = phase_starts.pop(name, None)
+        elapsed = (perf_counter() - started_at) if started_at is not None else float("nan")
+        elapsed_fragment = f"elapsed={elapsed:.2f}s"
+        LOGGER.info("Phase[%s] END | %s%s", name, elapsed_fragment, _phase_context_suffix(**context))
 
     paths = ensure_directories()
     _cleanup_nonessential_metric_csvs(paths.outputs_metrics)
@@ -852,7 +872,7 @@ def run(
         except Exception as read_error:
             LOGGER.warning("Unable to load previous Bayesian convergence diagnostics: %s", read_error)
 
-    LOGGER.info("Phase: load")
+    _phase_start("load", start_year=int(start_year), end_year=int(end_year))
     raw_df, population_df = runtime_config.call_load_data_compat(
         load_data_callable,
         raw_data_path,
@@ -861,17 +881,24 @@ def run(
         end_year=end_year,
         discovery_dir=raw_data_path.parent,
     )
+    _phase_end(
+        "load",
+        raw_rows=int(len(raw_df)),
+        population_rows=int(len(population_df)) if population_df is not None else 0,
+    )
 
     curated_contract_path = Path(
         str(raw_model_config.get("curated_municipalities_path", _DEFAULT_CURATED_MUNICIPALITIES_PATH))
     )
-    LOGGER.info("Phase: clean")
+    _phase_start("clean")
     cleaned_df = clean_data(raw_df, start_year=start_year, end_year=end_year)
+    _phase_end("clean", rows=int(len(cleaned_df)))
 
-    LOGGER.info("Phase: impute")
+    _phase_start("impute")
     imputed_df = impute_climate(cleaned_df)
+    _phase_end("impute", rows=int(len(imputed_df)))
 
-    LOGGER.info("Phase: merge")
+    _phase_start("merge", population_attached=bool(population_df is not None))
     merged_df = imputed_df
     if population_df is not None:
         merged_df = merge_population(imputed_df, population_df)
@@ -894,6 +921,7 @@ def run(
                 "Pre-label canonicalization removed %s duplicate district/date rows",
                 dropped_rows,
             )
+    _phase_end("merge", rows=int(len(merged_df)))
 
     curated_contract = _load_curated_municipality_contract(curated_contract_path)
     curated_municipality_ids = set(curated_contract["municipality_ids"])
@@ -908,7 +936,7 @@ def run(
             f"contract_path={curated_contract_path}"
         )
 
-    LOGGER.info("Phase: labels")
+    _phase_start("labels", selected_percentile=int(selected_percentile))
     labeled_df = runtime_config.call_label_outbreaks_compat(
         label_callable,
         label_input_df,
@@ -917,6 +945,7 @@ def run(
         cv_config=effective_cv_config,
         strict_mode=bool(strict_feature_gate),
     )
+    _phase_end("labels", rows=int(len(labeled_df)))
 
     threshold_scope_audit = runtime_baseline.audit_train_fold_threshold_scope(
         labeled_df,
@@ -960,7 +989,7 @@ def run(
 
     labeled_output = paths.data_processed / "epiclim_labeled.csv"
     labeled_df.to_csv(labeled_output, index=False)
-    LOGGER.info("Phase: feature matrix")
+    _phase_start("feature_matrix")
     feature_quality_gate_path = paths.outputs_reports / "feature_quality_gate_report.json"
     feature_output = paths.data_features / "feature_matrix.csv"
     features_df = _call_build_feature_matrix_compat(
@@ -977,6 +1006,7 @@ def run(
         target_column="outbreak_label",
         strict=bool(strict_feature_gate),
     )
+    _phase_end("feature_matrix", rows=int(len(features_df)), columns=int(features_df.shape[1]))
     state.artifacts["labeled_data"] = labeled_output
     state.artifacts["feature_matrix"] = feature_output
 
@@ -1124,6 +1154,7 @@ def run(
         )
     state.artifacts["feature_quality_gate_report"] = feature_quality_gate_path
 
+    _phase_start("baseline", skip=bool(skip_baselines))
     baseline_result = runtime_baseline.run_baseline_phase(
         state=state,
         paths=paths,
@@ -1150,8 +1181,14 @@ def run(
         collect_baseline_oof_fold_ids_fn=_collect_baseline_oof_fold_ids,
         safe_write_json_fn=_safe_write_json,
     )
+    _phase_end(
+        "baseline",
+        headline_eligible=bool(baseline_result.baseline_headline_eligible),
+        evaluated_folds=int(baseline_result.baseline_evaluated_fold_count),
+    )
 
     strict_or_full_bayesian_mode = bool(strict_bayesian_deps or bayesian_settings_fullfit.get("force_full_bayesian", False))
+    _phase_start("bayesian", skip=bool(skip_bayesian))
     bayesian_result = runtime_bayesian.run_bayesian_phase(
         state=state,
         paths=paths,
@@ -1182,6 +1219,11 @@ def run(
         check_convergence_fn=check_convergence,
         extract_rhat_ess_fn=extract_rhat_ess,
         safe_write_json_fn=_safe_write_json,
+    )
+    _phase_end(
+        "bayesian",
+        headline_eligible=bool(bayesian_result.bayesian_headline_eligible),
+        converged=bool(bayesian_result.bayesian_converged),
     )
 
     bayesian_sampling_diagnostics = bayesian_result.bayesian_sampling_diagnostics or {}
@@ -1248,6 +1290,7 @@ def run(
                 )
                 runtime_artifacts.safe_write_json(fold_ledger_payload, Path(fold_ledger_path))
 
+    _phase_start("evaluation_decision")
     eval_decision_result = runtime_eval_decision.run_evaluation_and_decision_phase(
         state=state,
         paths=paths,
@@ -1291,8 +1334,13 @@ def run(
         build_comparison_table_fn=build_comparison_table,
         safe_write_json_fn=_safe_write_json,
     )
+    _phase_end(
+        "evaluation_decision",
+        decision_rows=int(len(eval_decision_result.decision_frame)),
+        suppress_headline=bool(eval_decision_result.suppress_headline_comparison),
+    )
 
-    LOGGER.info("Phase: visualizations")
+    _phase_start("visualizations", skip=bool(skip_visualizations))
     if not skip_visualizations:
         _cleanup_legacy_figure_placeholders(paths.outputs_figures)
         legacy_lead_time_plot = paths.outputs_figures / "performance_lead_time_boxplot.png"
@@ -1491,6 +1539,7 @@ def run(
         _cleanup_legacy_figure_placeholders(paths.outputs_figures)
     else:
         LOGGER.info("Visualization phase skipped by flag")
+    _phase_end("visualizations")
 
     run_completed_at = datetime.now(timezone.utc).isoformat()
     run_manifest_path = paths.outputs_reports / "run_manifest.json"
@@ -1566,7 +1615,7 @@ def run(
         expected_run_id=run_id,
     )
 
-    LOGGER.info("Pipeline completed successfully")
+    LOGGER.info("Pipeline completed successfully | total_elapsed=%.2fs", (perf_counter() - run_started_perf))
     return state.artifacts
 
 

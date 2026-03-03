@@ -235,6 +235,21 @@ def train_baselines(
     cv_metrics_records: list[dict[str, float | int | str]] = []
     fold_ledger = build_fold_ledger_fn(training_frame, cv_cfg)
     (output_root / "fold_ledger.json").write_text(json.dumps(fold_ledger, indent=2), encoding="utf-8")
+    yielded_fold_ledger = [fold for fold in fold_ledger if str(fold.get("status")) == "yielded"]
+    skipped_fold_ledger = [fold for fold in fold_ledger if str(fold.get("status")) != "yielded"]
+    skipped_by_reason: dict[str, int] = {}
+    for fold in skipped_fold_ledger:
+        reason = str(fold.get("reason", "unknown"))
+        skipped_by_reason[reason] = int(skipped_by_reason.get(reason, 0)) + 1
+    LOGGER.info(
+        "Baseline CV plan | total_folds=%d, yielded=%d, skipped=%d, minimum_evaluated_folds=%d",
+        int(len(fold_ledger)),
+        int(len(yielded_fold_ledger)),
+        int(len(skipped_fold_ledger)),
+        int(cv_cfg.minimum_evaluated_folds),
+    )
+    if skipped_by_reason:
+        LOGGER.info("Baseline CV skipped fold reasons: %s", skipped_by_reason)
     case_ref = pd.Series(case_series.to_numpy(), index=X.index) if case_series is not None and len(case_series) == len(X) else None
     district_ref = pd.Series(district_series.to_numpy(), index=X.index) if district_series is not None and len(district_series) == len(X) else None
     temporal_ref = (
@@ -255,7 +270,25 @@ def train_baselines(
         )
 
     if config.enable_temporal_cv:
+        folds_started = 0
+        folds_skipped_single_class = 0
+        folds_with_predictions = 0
+        total_yielded_folds = int(len(yielded_fold_ledger))
         for fold_id, (train_idx, valid_idx) in enumerate(generate_time_splits_fn(training_frame, cv_cfg), start=1):
+            folds_started += 1
+            fold_meta = yielded_fold_ledger[fold_id - 1] if fold_id <= total_yielded_folds else {}
+            remaining_folds = max(total_yielded_folds - fold_id, 0)
+            LOGGER.info(
+                "Baseline CV fold %d/%d START | valid_year=%s, train=%s-%s, rows_train=%d, rows_valid=%d, remaining_after=%d",
+                int(fold_id),
+                int(total_yielded_folds),
+                fold_meta.get("valid_year", "unknown"),
+                fold_meta.get("train_start_year", "unknown"),
+                fold_meta.get("train_end_year", "unknown"),
+                int(len(train_idx)),
+                int(len(valid_idx)),
+                int(remaining_folds),
+            )
             fold_dir = output_root / f"fold_{fold_id}"
             fold_dir.mkdir(parents=True, exist_ok=True)
 
@@ -283,7 +316,12 @@ def train_baselines(
             valid_index = X.index.take(valid_positions)
 
             if pd.to_numeric(y_train, errors="coerce").dropna().nunique() <= 1:
-                LOGGER.info("Skipping fold_%d because training labels are single-class", fold_id)
+                folds_skipped_single_class += 1
+                LOGGER.info(
+                    "Skipping fold_%d because training labels are single-class | remaining_after=%d",
+                    fold_id,
+                    int(remaining_folds),
+                )
                 continue
 
             fold_predictions: dict[str, pd.Series] = {}
@@ -316,10 +354,33 @@ def train_baselines(
                 )
 
             if fold_predictions:
+                folds_with_predictions += 1
                 pd.DataFrame(fold_predictions, index=valid_index).to_csv(
                     fold_dir / "predictions.csv",
                     index=True,
                 )
+                LOGGER.info(
+                    "Baseline CV fold %d/%d END | models_trained=%d, remaining_after=%d",
+                    int(fold_id),
+                    int(total_yielded_folds),
+                    int(len(fold_predictions)),
+                    int(remaining_folds),
+                )
+            else:
+                LOGGER.info(
+                    "Baseline CV fold %d/%d END | no_models_trained, remaining_after=%d",
+                    int(fold_id),
+                    int(total_yielded_folds),
+                    int(remaining_folds),
+                )
+
+        LOGGER.info(
+            "Baseline CV summary | yielded=%d, started=%d, folds_with_predictions=%d, skipped_single_class=%d",
+            int(total_yielded_folds),
+            int(folds_started),
+            int(folds_with_predictions),
+            int(folds_skipped_single_class),
+        )
 
     final_dir = output_root / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
