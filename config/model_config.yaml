@@ -52,16 +52,16 @@ bayesian_model_profiles:
   # Fast profile for iterative CV/testing.
   cv:
     chains: 2
-    tune: 200
-    draws: 200
+    tune: 1000
+    draws: 1000
     target_accept: 0.90
     max_treedepth: 12
     bayesian_progress: false
   # Still moderate for fullfit while remaining testing-friendly.
   final:
     chains: 3
-    tune: 200
-    draws: 200
+    tune: 1000
+    draws: 1000
     target_accept: 0.85
     max_treedepth: 8
     bayesian_progress: false

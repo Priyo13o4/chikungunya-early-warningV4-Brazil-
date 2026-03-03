@@ -5,6 +5,7 @@ import inspect
 import logging
 from pathlib import Path
 import re
+import shutil
 from typing import Any, Callable
 
 import numpy as np
@@ -168,6 +169,26 @@ def collect_baseline_oof_fold_ids(output_root: Path) -> list[int]:
         if match:
             fold_ids.append(int(match.group(1)))
     return fold_ids
+
+
+def clear_stale_baseline_artifacts(output_root: Path) -> dict[str, int]:
+    removed_fold_dirs = 0
+    removed_files = 0
+    if not output_root.exists():
+        return {"removed_fold_dirs": 0, "removed_files": 0}
+
+    for fold_dir in sorted(output_root.glob("fold_*")):
+        if fold_dir.is_dir():
+            shutil.rmtree(fold_dir, ignore_errors=True)
+            removed_fold_dirs += 1
+
+    for stale_name in ("cv_metrics.csv", "cv_metrics_aggregate.csv", "fold_ledger.json"):
+        stale_path = output_root / stale_name
+        if stale_path.exists() and stale_path.is_file():
+            stale_path.unlink()
+            removed_files += 1
+
+    return {"removed_fold_dirs": int(removed_fold_dirs), "removed_files": int(removed_files)}
 
 
 def collect_baseline_oof_scores(
@@ -355,6 +376,16 @@ def run_baseline_phase(
     baseline_evaluated_fold_count = 0
     if not skip_baselines:
         LOGGER.info("Baseline compute backend: %s", baseline_compute_backend)
+        baseline_output_root = paths.outputs_models / "baselines"
+        baseline_output_root.mkdir(parents=True, exist_ok=True)
+        cleanup_summary = clear_stale_baseline_artifacts(baseline_output_root)
+        if cleanup_summary["removed_fold_dirs"] or cleanup_summary["removed_files"]:
+            LOGGER.info(
+                "Cleared stale baseline artifacts before run (fold_dirs=%d, files=%d)",
+                int(cleanup_summary["removed_fold_dirs"]),
+                int(cleanup_summary["removed_files"]),
+            )
+
         baseline_train_kwargs: dict[str, Any] = {
             "model_names": model_names,
             "config": baseline_training_config_cls(
@@ -427,6 +458,19 @@ def run_baseline_phase(
                 baseline_headline_eligible = True
 
                 if baseline_oof_predictions is not None and not baseline_oof_predictions.empty:
+                    configured_model_names = (
+                        [str(name) for name in model_names]
+                        if model_names
+                        else [str(name) for name in baseline_models.keys()]
+                    )
+                    if not configured_model_names:
+                        configured_model_names = [str(name) for name in baseline_oof_predictions.columns]
+                    allowed_model_set = set(configured_model_names)
+                    filtered_model_columns = [
+                        column for column in baseline_oof_predictions.columns if str(column) in allowed_model_set
+                    ]
+                    baseline_oof_predictions = baseline_oof_predictions.loc[:, filtered_model_columns]
+
                     model_metric_rows: list[dict[str, Any]] = []
                     for model_name in baseline_oof_predictions.columns:
                         model_score = pd.to_numeric(baseline_oof_predictions[model_name], errors="coerce")

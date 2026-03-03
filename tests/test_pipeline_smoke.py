@@ -247,6 +247,232 @@ def test_baseline_phase_propagates_custom_splitter_to_train_baselines(tmp_path) 
     assert splitter_observed["used"] is True
 
 
+def test_baseline_phase_cleans_stale_fold_artifacts_before_training(tmp_path) -> None:
+    reports_dir = tmp_path / "reports"
+    models_dir = tmp_path / "models"
+    metrics_dir = tmp_path / "metrics"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    stale_root = models_dir / "baselines"
+    stale_fold_dir = stale_root / "fold_99"
+    stale_fold_dir.mkdir(parents=True, exist_ok=True)
+    (stale_fold_dir / "predictions.csv").write_text("idx,ghost_model\n0,0.9\n", encoding="utf-8")
+    (stale_fold_dir / "ghost_model.pkl").write_text("stale", encoding="utf-8")
+    (stale_root / "cv_metrics.csv").write_text("fold,model\n99,ghost_model\n", encoding="utf-8")
+    (stale_root / "cv_metrics_aggregate.csv").write_text("model,accuracy\nghost_model,1.0\n", encoding="utf-8")
+    (stale_root / "fold_ledger.json").write_text("[]", encoding="utf-8")
+
+    paths = SimpleNamespace(
+        outputs_reports=reports_dir,
+        outputs_models=models_dir,
+        outputs_metrics=metrics_dir,
+    )
+    labeled_df = pd.DataFrame(
+        {
+            "date": ["2016-01-01", "2017-01-01", "2018-01-01"],
+            "district": ["A", "A", "A"],
+            "cases": [1.0, 2.0, 3.0],
+            "outbreak_label": [0, 1, 0],
+            "threshold_p75": [1.0, 1.0, 1.0],
+        }
+    )
+    features_df = pd.DataFrame(
+        {
+            "temp_anomaly": [0.1, 0.2, 0.3],
+            "rainfall_4wk": [10.0, 11.0, 12.0],
+        },
+        index=labeled_df.index,
+    )
+
+    observed = {"cleanup_happened_before_train": False}
+
+    def fake_train_baselines(X, y, *, config, cv_config, model_names):
+        X
+        y
+        config
+        cv_config
+        model_names
+        observed["cleanup_happened_before_train"] = not any(stale_root.glob("fold_*"))
+        return {}
+
+    def fake_predict_baselines(models, X):
+        models
+        return pd.DataFrame(index=X.index)
+
+    def fake_evaluate_baseline_predictions(*args, **kwargs):
+        args
+        kwargs
+        return {"accuracy": 0.0}
+
+    def fake_collect_oof_scores(*, output_root, expected_index):
+        output_root
+        return pd.Series(np.nan, index=expected_index, dtype="float64")
+
+    def fake_collect_oof_predictions(*, output_root, expected_index):
+        output_root
+        return pd.DataFrame(index=expected_index)
+
+    def fake_collect_oof_fold_ids(output_root):
+        output_root
+        return []
+
+    def safe_write_json(payload: dict, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    run_baseline_phase(
+        state=SharedPhaseState(run_id="test-run"),
+        paths=paths,
+        labeled_df=labeled_df,
+        features_df=features_df,
+        selected_percentile=75,
+        effective_cv_config=TimeSeriesCVConfig(
+            date_column="date",
+            target_column="outbreak_label",
+            start_train_year=2016,
+            first_valid_year=2017,
+            last_valid_year=2018,
+            skip_single_class_folds=False,
+        ),
+        effective_seed=42,
+        strict_feature_gate=True,
+        baseline_compute_backend="cpu",
+        skip_baselines=False,
+        export_detailed_csv=False,
+        model_names=["random_forest"],
+        lead_time_max_lookback_steps=8,
+        threshold_scope_audit={"checked": False},
+        cv_ledger_callable=lambda df, cv_cfg: [{"status": "yielded", "valid_year": 2018}],
+        cv_split_callable=lambda df, cv_cfg: iter(()),
+        train_baselines_fn=fake_train_baselines,
+        baseline_training_config_cls=BaselineTrainingConfig,
+        predict_baselines_fn=fake_predict_baselines,
+        evaluate_baseline_predictions_fn=fake_evaluate_baseline_predictions,
+        collect_baseline_oof_scores_fn=fake_collect_oof_scores,
+        collect_baseline_oof_predictions_fn=fake_collect_oof_predictions,
+        collect_baseline_oof_fold_ids_fn=fake_collect_oof_fold_ids,
+        safe_write_json_fn=safe_write_json,
+    )
+
+    assert observed["cleanup_happened_before_train"] is True
+    assert not (stale_root / "fold_99").exists()
+    assert not (stale_root / "cv_metrics.csv").exists()
+    assert not (stale_root / "cv_metrics_aggregate.csv").exists()
+    assert not (stale_root / "fold_ledger.json").exists()
+
+
+def test_baseline_tracka_model_scores_filters_to_configured_model_names(tmp_path) -> None:
+    reports_dir = tmp_path / "reports"
+    models_dir = tmp_path / "models"
+    metrics_dir = tmp_path / "metrics"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    paths = SimpleNamespace(
+        outputs_reports=reports_dir,
+        outputs_models=models_dir,
+        outputs_metrics=metrics_dir,
+    )
+    labeled_df = pd.DataFrame(
+        {
+            "date": ["2016-01-01", "2017-01-01", "2018-01-01"],
+            "district": ["A", "A", "A"],
+            "cases": [1.0, 2.0, 3.0],
+            "outbreak_label": [0, 1, 0],
+            "threshold_p75": [1.0, 1.0, 1.0],
+        }
+    )
+    features_df = pd.DataFrame(
+        {
+            "temp_anomaly": [0.1, 0.2, 0.3],
+            "rainfall_4wk": [10.0, 11.0, 12.0],
+        },
+        index=labeled_df.index,
+    )
+
+    def fake_train_baselines(X, y, *, config, cv_config, model_names):
+        X
+        y
+        config
+        cv_config
+        model_names
+        return {"random_forest": object()}
+
+    def fake_predict_baselines(models, X):
+        models
+        return pd.DataFrame({"random_forest": [0.2, 0.4, 0.6]}, index=X.index)
+
+    def fake_evaluate_baseline_predictions(*args, **kwargs):
+        args
+        kwargs
+        return {"accuracy": 0.5, "f1": 0.5}
+
+    def fake_collect_oof_scores(*, output_root, expected_index):
+        output_root
+        return pd.Series([0.3, 0.5, 0.7], index=expected_index, dtype="float64")
+
+    def fake_collect_oof_predictions(*, output_root, expected_index):
+        output_root
+        return pd.DataFrame(
+            {
+                "random_forest": [0.2, 0.4, 0.6],
+                "ghost_removed_model": [0.9, 0.9, 0.9],
+            },
+            index=expected_index,
+        )
+
+    def fake_collect_oof_fold_ids(output_root):
+        output_root
+        return [1]
+
+    def safe_write_json(payload: dict, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    run_baseline_phase(
+        state=SharedPhaseState(run_id="test-run"),
+        paths=paths,
+        labeled_df=labeled_df,
+        features_df=features_df,
+        selected_percentile=75,
+        effective_cv_config=TimeSeriesCVConfig(
+            date_column="date",
+            target_column="outbreak_label",
+            start_train_year=2016,
+            first_valid_year=2017,
+            last_valid_year=2018,
+            skip_single_class_folds=False,
+            minimum_evaluated_folds=1,
+        ),
+        effective_seed=42,
+        strict_feature_gate=True,
+        baseline_compute_backend="cpu",
+        skip_baselines=False,
+        export_detailed_csv=False,
+        model_names=["random_forest"],
+        lead_time_max_lookback_steps=8,
+        threshold_scope_audit={"checked": False},
+        cv_ledger_callable=lambda df, cv_cfg: [{"status": "yielded", "valid_year": 2018}],
+        cv_split_callable=lambda df, cv_cfg: iter(()),
+        train_baselines_fn=fake_train_baselines,
+        baseline_training_config_cls=BaselineTrainingConfig,
+        predict_baselines_fn=fake_predict_baselines,
+        evaluate_baseline_predictions_fn=fake_evaluate_baseline_predictions,
+        collect_baseline_oof_scores_fn=fake_collect_oof_scores,
+        collect_baseline_oof_predictions_fn=fake_collect_oof_predictions,
+        collect_baseline_oof_fold_ids_fn=fake_collect_oof_fold_ids,
+        safe_write_json_fn=safe_write_json,
+    )
+
+    score_path = metrics_dir / "tracka_model_scores.csv"
+    assert score_path.exists()
+    score_df = pd.read_csv(score_path)
+    assert score_df["model"].tolist() == ["random_forest"]
+
+
 def test_memory_optimization_default_noop_behavior() -> None:
     labeled = pd.DataFrame(
         {
