@@ -328,10 +328,22 @@ class HierarchicalBayesianModel:
         frame["__state_code__"] = self._resolve_state_codes(frame).astype(str).fillna("unknown")
 
         threshold_values, threshold_meta = self._resolve_outbreak_thresholds(frame, outbreak_threshold)
+        threshold_values_for_risk = np.where(np.asarray(threshold_values, dtype=float) <= 0.0, 1.0, threshold_values)
+        threshold_clamped_count = int(np.sum(np.asarray(threshold_values, dtype=float) <= 0.0))
+        threshold_meta = {
+            **threshold_meta,
+            "threshold_clamped_for_risk": bool(threshold_clamped_count > 0),
+            "threshold_clamped_count": threshold_clamped_count,
+            "threshold_clamped_min_cases": 1.0,
+        }
         district_effect, covariate_effect, time_effect, x_scaled = self._compute_linear_components(frame)
         linear_mean = district_effect + covariate_effect + time_effect
         mu_mean = np.exp(np.clip(linear_mean, a_min=-20.0, a_max=20.0))
-        risk_mean_point = self._nb_exceedance_probability(mu_mean, np.full(len(frame), self.alpha_nb_), threshold_values)
+        risk_mean_point = self._nb_exceedance_probability(
+            mu_mean,
+            np.full(len(frame), self.alpha_nb_),
+            threshold_values_for_risk,
+        )
 
         if self.idata_ is None:
             risk_frame = pd.DataFrame(
@@ -436,7 +448,7 @@ class HierarchicalBayesianModel:
             beta_draws_f32 = beta_draws.astype(np.float32, copy=False)
             alpha_nb_draws_f32 = alpha_nb_draws.astype(np.float32, copy=False)
             x_scaled_f32 = x_scaled.astype(np.float32, copy=False)
-            threshold_values_f32 = threshold_values.astype(np.float32, copy=False)
+            threshold_values_f32 = threshold_values_for_risk.astype(np.float32, copy=False)
 
             for start in range(0, n_rows, chunk_rows):
                 end = min(start + chunk_rows, n_rows)

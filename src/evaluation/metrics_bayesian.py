@@ -7,7 +7,16 @@ from typing import Dict, Sequence
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, average_precision_score, brier_score_loss, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    brier_score_loss,
+    cohen_kappa_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 from src.evaluation.metrics_baselines import false_alarm_rate, lead_time_steps, simple_lead_time_utility
 
@@ -115,6 +124,10 @@ def evaluate_bayesian_predictions(
 
     metrics: Dict[str, float] = {
         "accuracy": float(accuracy_score(y_true_series, y_pred)),
+        "precision": float(precision_score(y_true_series, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_true_series, y_pred, zero_division=0)),
+        "f1": float(f1_score(y_true_series, y_pred, zero_division=0)),
+        "kappa": float(cohen_kappa_score(y_true_series, y_pred)),
         "brier": bayesian_brier_score(y_true_series, risk_series),
         "false_alarm_rate": false_alarm_rate(y_true_series, y_pred),
     }

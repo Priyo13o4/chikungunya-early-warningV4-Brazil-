@@ -130,6 +130,73 @@ def _impute_fold_climate_features(
     return train_output, valid_output
 
 
+def _impute_selected_covariates_for_bayesian(
+    frame: pd.DataFrame,
+    *,
+    covariates: list[str],
+    context: str,
+    district_column: str = "district",
+    date_column: str = "date",
+) -> pd.DataFrame:
+    if frame.empty or not covariates:
+        return frame
+
+    output = frame.copy()
+    deterministic_order = output.copy()
+    deterministic_order["__row_order__"] = np.arange(len(deterministic_order), dtype=int)
+    if district_column in deterministic_order.columns:
+        district_sort = deterministic_order[district_column].astype(str)
+    else:
+        district_sort = pd.Series("", index=deterministic_order.index, dtype="object")
+    if date_column in deterministic_order.columns:
+        date_sort = pd.to_datetime(deterministic_order[date_column], errors="coerce")
+    else:
+        date_sort = pd.Series(pd.NaT, index=deterministic_order.index)
+    deterministic_order["__district_sort__"] = district_sort
+    deterministic_order["__date_sort__"] = date_sort
+    deterministic_order = deterministic_order.sort_values(
+        ["__district_sort__", "__date_sort__", "__row_order__"],
+        kind="mergesort",
+    )
+
+    for covariate in covariates:
+        if covariate not in deterministic_order.columns:
+            continue
+        numeric = pd.to_numeric(deterministic_order[covariate], errors="coerce")
+        missing_before = int(numeric.isna().sum())
+        if missing_before == 0:
+            deterministic_order[covariate] = numeric
+            continue
+
+        filled = numeric.copy()
+        if district_column in deterministic_order.columns:
+            district_groups = deterministic_order[district_column].astype(str)
+            filled = filled.groupby(district_groups, dropna=False).transform(lambda values: values.ffill())
+
+        if district_column in deterministic_order.columns:
+            district_groups = deterministic_order[district_column].astype(str)
+            district_median = numeric.groupby(district_groups, dropna=False).transform("median")
+            filled = filled.fillna(district_median)
+
+        global_median = numeric.median(skipna=True)
+        if pd.notna(global_median):
+            filled = filled.fillna(float(global_median))
+
+        deterministic_order[covariate] = filled
+        missing_after = int(pd.to_numeric(deterministic_order[covariate], errors="coerce").isna().sum())
+        LOGGER.info(
+            "Bayesian covariate imputation (%s): covariate=%s missing %d -> %d using forward_fill_then_district_median",
+            context,
+            covariate,
+            missing_before,
+            missing_after,
+        )
+
+    deterministic_order = deterministic_order.sort_values("__row_order__", kind="mergesort")
+    deterministic_order = deterministic_order.drop(columns=["__row_order__", "__district_sort__", "__date_sort__"])
+    return deterministic_order
+
+
 def _build_future_case_series(
     *,
     case_series: pd.Series,
@@ -781,6 +848,17 @@ def collect_bayesian_oof_scores(
                 )
                 continue
 
+            fold_train_features = _impute_selected_covariates_for_bayesian(
+                fold_train_features,
+                covariates=fold_selected_covariates,
+                context=f"oof_fold_{int(fold_number)}_train",
+            )
+            fold_valid_features = _impute_selected_covariates_for_bayesian(
+                fold_valid_features,
+                covariates=fold_selected_covariates,
+                context=f"oof_fold_{int(fold_number)}_valid",
+            )
+
             fold_settings = dict(bayesian_settings)
             fold_settings["climate_covariates"] = fold_selected_covariates
 
@@ -1013,6 +1091,11 @@ def run_bayesian_phase(
         else:
             bayesian_settings_fullfit["climate_covariates"] = list(selected_covariates)
             bayesian_settings_cv["climate_covariates"] = list(selected_covariates)
+            subset_model_input_df = _impute_selected_covariates_for_bayesian(
+                subset_model_input_df,
+                covariates=selected_covariates,
+                context="fullfit_subset",
+            )
 
             bayes_track_kwargs: dict[str, Any] = {
                 "outbreak_threshold": subset_threshold_series,

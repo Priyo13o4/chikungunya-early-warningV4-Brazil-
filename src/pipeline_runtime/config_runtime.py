@@ -26,6 +26,7 @@ _DEFAULT_BAYESIAN_CLIMATE_COVARIATES: tuple[str, ...] = (
     "weekofyear",
 )
 _BAYESIAN_COVARIATE_MIN_VARIANCE: float = 1e-12
+_BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX: float = 0.01
 _SUPPORTED_BAYESIAN_PROFILE_MODES: set[str] = {"cv", "final", "dev"}
 _BAYESIAN_PROFILE_KEYS: tuple[str, ...] = (
     "chains",
@@ -278,7 +279,7 @@ def select_bayesian_covariates_by_availability(
         reason: str | None = None
         if row_count <= 0:
             reason = "no_rows"
-        elif non_null_count < row_count:
+        elif non_null_count < row_count and null_rate >= float(_BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX):
             reason = "null_or_non_numeric_values"
         elif variance <= float(min_variance):
             reason = "degenerate_variance"
@@ -293,6 +294,12 @@ def select_bayesian_covariates_by_availability(
             "availability_rate": availability_rate,
             "null_rate": null_rate,
             "variance": variance,
+            "imputation_required": bool(non_null_count < row_count and row_count > 0),
+            "imputation_strategy": (
+                "forward_fill_then_district_median"
+                if non_null_count < row_count and row_count > 0 and null_rate < float(_BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX)
+                else None
+            ),
         }
         covariate_diagnostics.append(diagnostics)
         if reason is None:
@@ -317,6 +324,7 @@ def select_bayesian_covariates_by_availability(
 
     return {
         "selection_basis": "lowest_null_rate_then_variance",
+        "null_rate_imputation_max": float(_BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX),
         "requested_covariates": unique_requested,
         "selected_covariates": selected_covariates,
         "excluded_covariates": excluded_covariates,
@@ -505,7 +513,13 @@ def parse_memory_optimization_config(raw_model_config: dict[str, Any] | None) ->
     if not isinstance(raw_memory, dict):
         return MemoryOptimizationConfig()
 
-    mode = str(raw_memory.get("mode", "off")).strip().lower()
+    raw_mode = raw_memory.get("mode", "off")
+    if isinstance(raw_mode, bool):
+        mode = "hybrid" if raw_mode else "off"
+    else:
+        mode = str(raw_mode).strip().lower()
+        if mode in {"0", "false", "no", "n", "off", "none", "null", ""}:
+            mode = "off"
     if mode not in {"off", "year_window", "district_shard", "hybrid"}:
         LOGGER.warning("Invalid memory_optimization.mode '%s'; defaulting to 'off'", mode)
         mode = "off"
@@ -628,10 +642,12 @@ def resolve_bayesian_profile_settings(
         if not profile_dev:
             warning_flags.append("dev_profile_missing_fallback_to_base_settings")
     elif normalized_mode == "cv":
-        fullfit_profile_name = "cv"
+        fullfit_profile_name = "final"
         cv_profile_name = "cv"
-        fullfit_overlay = profile_cv
+        fullfit_overlay = profile_final
         cv_overlay = profile_cv
+        if not profile_final:
+            warning_flags.append("final_profile_missing_fallback_to_base_settings")
         if not profile_cv:
             warning_flags.append("cv_profile_missing_fallback_to_base_settings")
     elif normalized_mode == "final":

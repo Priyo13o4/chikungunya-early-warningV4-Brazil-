@@ -114,6 +114,35 @@ def test_bayesian_predict_with_uncertainty_returns_intervals_and_metadata() -> N
     assert float(risk_frame.loc[0, "risk_mean"]) >= float(risk_frame.loc[1, "risk_mean"])
 
 
+def test_bayesian_predict_with_uncertainty_clamps_nonpositive_threshold_for_risk_only() -> None:
+    original_loader = hierarchical_model._require_pymc_dependencies
+
+    def _missing_optional_dependencies():
+        raise ImportError("optional deps missing in test")
+
+    hierarchical_model._require_pymc_dependencies = _missing_optional_dependencies
+    try:
+        X = pd.DataFrame(
+            {
+                "district": ["A", "A", "B"],
+                "date": ["2016-01-01", "2016-01-08", "2016-01-15"],
+                "month": [1.0, 2.0, 3.0],
+                "year": [2016.0, 2017.0, 2018.0],
+                "weekofyear": [1.0, 2.0, 3.0],
+            }
+        )
+        y = pd.Series([0.0, 2.0, 1.0])
+        thresholds = pd.Series([0.0, -3.0, 2.0])
+        model = hierarchical_model.HierarchicalBayesianModel().fit(X, y)
+        risk_frame, metadata = model.predict_with_uncertainty(X, outbreak_threshold=thresholds)
+    finally:
+        hierarchical_model._require_pymc_dependencies = original_loader
+
+    assert risk_frame["threshold_cases"].tolist() == [0.0, -3.0, 2.0]
+    assert metadata.get("threshold_clamped_for_risk") is True
+    assert int(metadata.get("threshold_clamped_count", 0)) == 2
+
+
 def test_bayesian_model_config_accepts_convergence_failure_mode() -> None:
     strict_cfg = hierarchical_model.BayesianModelConfig(convergence_failure_mode="strict")
     warn_cfg = hierarchical_model.BayesianModelConfig(convergence_failure_mode="warn")
@@ -185,6 +214,52 @@ def test_select_bayesian_covariates_by_availability_prefers_higher_variance_tie_
     )
 
     assert selection["selected_covariates"] == ["cov_high", "cov_low"]
+
+
+def test_select_bayesian_covariates_by_availability_keeps_tiny_null_rate_for_imputation() -> None:
+    frame = pd.DataFrame(
+        {
+            "cov_keep": ([0.1, 0.2] * 50) + [None],
+        }
+    )
+
+    selection = config_runtime.select_bayesian_covariates_by_availability(
+        frame=frame,
+        requested_covariates=["cov_keep"],
+    )
+
+    assert selection["selected_covariates"] == ["cov_keep"]
+    diagnostics = {item["name"]: item for item in selection["covariate_diagnostics"]}
+    assert diagnostics["cov_keep"]["imputation_required"] is True
+    assert diagnostics["cov_keep"]["imputation_strategy"] == "forward_fill_then_district_median"
+
+
+def test_resolve_bayesian_profile_settings_cv_override_keeps_fullfit_final() -> None:
+    fullfit, oof, usage = config_runtime.resolve_bayesian_profile_settings(
+        bayesian_settings={"draws": 800, "chains": 2},
+        bayesian_profiles={
+            "final": {"draws": 1000, "chains": 3},
+            "cv": {"draws": 300, "chains": 1},
+        },
+        profile_mode="cv",
+    )
+
+    assert int(fullfit["draws"]) == 1000
+    assert int(oof["draws"]) == 300
+    assert usage["fullfit_profile_name"] == "final"
+    assert usage["oof_profile_name"] == "cv"
+
+
+def test_parse_memory_optimization_config_false_like_mode_maps_to_off() -> None:
+    parsed = config_runtime.parse_memory_optimization_config(
+        {
+            "memory_optimization": {
+                "mode": "False",
+            }
+        }
+    )
+
+    assert parsed.mode == "off"
 
 
 def test_run_bayesian_track_import_error_keeps_effective_covariates(monkeypatch) -> None:

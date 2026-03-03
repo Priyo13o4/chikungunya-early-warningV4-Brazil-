@@ -1,7 +1,8 @@
 cd "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4"
-source .venv/bin/activate
+source .venv310/bin/activate
 export PYTHONUNBUFFERED=1
 
+# 0) Refresh curated Top-300 panel snapshot from full processed dataset (2015-2025)
 python scripts/brazil/build_top300_dataset_snapshot.py \
   --input data/processed/brazil_chik_dataset_final.csv \
   --output-data data/processed/brazil_chik_dataset_top300_final.csv \
@@ -11,6 +12,15 @@ python scripts/brazil/build_top300_dataset_snapshot.py \
   --start-year 2015 \
   --end-year 2025
 
+# 1) Fast regression checks for approved fixes (sentinel threshold, profile routing, null-imputation gate, memory mode parsing)
+PYTHONPATH=. pytest -q tests/test_bayesian_model.py -k "clamps_nonpositive_threshold_for_risk_only or keeps_tiny_null_rate_for_imputation or cv_override_keeps_fullfit_final or false_like_mode_maps_to_off"
+
+# 2) Full targeted test bundle used during debugging/audit
+PYTHONPATH=. pytest -q tests/test_bayesian_model.py tests/test_metrics_integrity.py
+PYTHONPATH=. pytest -q tests/test_pipeline_smoke.py::test_decision_alerts_schema_locked_columns
+
+# 3) Main thesis-style run (data window 2015-2025; CV folds still governed by config/cv_config.yaml)
+#    Uses cv profile for faster iteration and skips visualization for faster turnaround.
 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --raw-data data/processed/brazil_chik_dataset_top300_final.csv \
@@ -19,43 +29,11 @@ python run_pipeline.py \
   --bayesian-profile-mode cv \
   --skip-visualizations \
   --no-strict-feature-gate \
-  --log-level INFO
-
-python -m pytest -q tests/test_bayesian_model.py tests/test_pipeline_smoke.py tests/test_metrics_integrity.py
-
-python run_pipeline.py \
-  --adapter-config projects/brazil_chik/config.yaml \
-  --start-year 2015 \
-  --end-year 2025 \
-  --skip-baselines \
-  --skip-bayesian \
-  --skip-visualizations \
-  --no-strict-feature-gate \
-  --log-level INFO
-
-python run_pipeline.py \
-  --adapter-config projects/brazil_chik/config.yaml \
-  --start-year 2015 \
-  --end-year 2025 \
-  --skip-bayesian \
-  --skip-visualizations \
-  --no-strict-feature-gate \
-  --log-level INFO
-
-# Testing-phase run (lighter profile; good default during iteration)
-PYTHONUNBUFFERED=1 python run_pipeline.py \
-  --adapter-config projects/brazil_chik/config.yaml \
-  --start-year 2015 \
-  --end-year 2025 \
-  --bayesian-profile-mode cv \
-  --bayesian-progress \
-  --skip-visualizations \
-  --no-strict-feature-gate \
   --log-level INFO \
   2>&1 | tee logs.txt
-  
-# Explicit low-budget override run (quick diagnostics/smoke)
-PYTHONUNBUFFERED=1 python run_pipeline.py \
+
+# 4) Quick low-budget smoke run (for runtime sanity only; not for final metrics)
+python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2025 \
@@ -68,7 +46,8 @@ PYTHONUNBUFFERED=1 python run_pipeline.py \
   --log-level INFO \
   2>&1 | tee logs_low_budget.txt
 
-PYTHONUNBUFFERED=1 python run_pipeline.py \
+# 5) Debug profile run on narrow time slice (helps isolate failures quickly)
+python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2019 \
   --end-year 2020 \
@@ -79,43 +58,45 @@ PYTHONUNBUFFERED=1 python run_pipeline.py \
   --log-level INFO \
   2>&1 | tee logs_debug_profile_final.txt
 
-python run_pipeline.py \
-  --adapter-config projects/brazil_chik/config.yaml \
-  --start-year 2015 \
-  --end-year 2020 \
-  --bayesian-profile-mode dev \
-  --bayesian-progress \
-  --skip-visualizations \
-  --no-strict-feature-gate \
-  --log-level INFO
-
-# Higher-budget confirmation run (use when you intentionally scale up)
+# 6) Visualization-enabled run (use after metrics look sane)
+#    Remove --skip-visualizations to generate figure artifacts.
 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
   --start-year 2015 \
   --end-year 2025 \
-  --bayesian-profile-mode final \
-  --bayesian-progress \
-  --skip-visualizations \
+  --bayesian-profile-mode cv \
   --no-strict-feature-gate \
-  --log-level INFO
+  --log-level INFO \
+  2>&1 | tee logs_with_viz.txt
 
+# 7) Post-run contract sanity checks for applied fixes
+#    Verifies:
+#    - threshold_cases populated in decision_alerts.csv
+#    - bayesian_metrics contains precision/recall/f1/kappa
+#    - profile routing metadata present
+#    - effective/requested covariates propagated
 python - <<'PY'
-import json, yaml, csv
+import json
+import pandas as pd
 from pathlib import Path
+
 root = Path('.')
-cfg = yaml.safe_load((root/'config/model_config.yaml').read_text())
-cov = cfg.get('bayesian_model',{}).get('climate_covariates',[])
-with open(root/'data/features/feature_matrix.csv', newline='') as f:
-    header = next(csv.reader(f), [])
-missing = [c for c in cov if c not in header]
-rm = json.loads((root/'outputs/reports/run_metadata.json').read_text())
-mf = json.loads((root/'outputs/reports/run_manifest.json').read_text())
-rk = json.loads((root/'outputs/metrics/bayesian_risk_metadata.json').read_text())
-print('missing_covariates=', missing)
-print('rm_req=', rm.get('bayesian_covariates_requested'))
-print('mf_req=', (mf.get('bayesian_covariates') or {}).get('requested'))
-print('rk_req=', rk.get('covariates_requested'))
+
+decision = pd.read_csv(root / 'outputs/metrics/decision_alerts.csv')
+bm = json.loads((root / 'outputs/metrics/bayesian_metrics.json').read_text())
+rm = json.loads((root / 'outputs/reports/run_metadata.json').read_text())
+risk_meta = json.loads((root / 'outputs/metrics/bayesian_risk_metadata.json').read_text())
+
+threshold_non_null = int(pd.to_numeric(decision.get('threshold_cases'), errors='coerce').notna().sum())
+required_bayes = ['precision', 'recall', 'f1', 'kappa']
+missing_bayes = [k for k in required_bayes if k not in bm]
+
+print('decision_rows=', len(decision))
+print('threshold_cases_non_null=', threshold_non_null)
+print('missing_bayesian_classification_metrics=', missing_bayes)
+print('profile_usage=', risk_meta.get('bayesian_profile_usage', {}))
+print('covariates_requested_run_metadata=', rm.get('bayesian_covariates_requested'))
+print('covariates_effective_risk_metadata=', risk_meta.get('covariates_effective'))
 PY
 
 # 🖥️ tmux Quick Reference

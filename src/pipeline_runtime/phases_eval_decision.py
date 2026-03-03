@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import cohen_kappa_score, f1_score, precision_score, recall_score
 
 from src.pipeline_runtime.io_artifacts import build_contract_track_comparison_placeholder, write_bayesian_convergence_summary
 from src.pipeline_runtime.phase_context import EvalDecisionPhaseResult, SharedPhaseState
@@ -99,43 +100,6 @@ def run_evaluation_and_decision_phase(
     safe_write_json_fn(degraded_run_payload, degraded_run_path)
     state.artifacts["degraded_run"] = degraded_run_path
 
-    LOGGER.info("Phase: evaluation")
-    if baseline_headline_eligible and bayesian_headline_eligible and not suppress_headline_comparison:
-        comparison_outputs = export_track_comparison_fn(
-            baseline_metrics=baseline_metrics,
-            bayesian_metrics=bayesian_metrics,
-            output_dir=paths.outputs_metrics,
-            filename_prefix="track_comparison",
-            include_wide_csv=export_detailed_csv,
-        )
-        state.artifacts["track_comparison_long_csv"] = comparison_outputs["long_csv"]
-        state.artifacts["track_comparison_markdown"] = comparison_outputs["markdown"]
-        state.artifacts["track_comparison_csv"] = comparison_outputs["long_csv"]
-        state.artifacts["track_comparison_md"] = comparison_outputs["markdown"]
-        if "wide_csv" in comparison_outputs:
-            state.artifacts["track_comparison_wide_csv"] = comparison_outputs["wide_csv"]
-
-        comparison_table = build_comparison_table_fn(
-            baseline_metrics=baseline_metrics,
-            bayesian_metrics=bayesian_metrics,
-        )
-    else:
-        comparison_table = None
-        LOGGER.info("Track comparison skipped because one or both tracks are unavailable or run is degraded")
-
-    if "track_comparison_csv" not in state.artifacts or "track_comparison_md" not in state.artifacts:
-        track_reason = "degraded_run_or_missing_track_metrics"
-        placeholder_frame, placeholder_markdown = build_contract_track_comparison_placeholder(
-            run_id=run_id,
-            reason=track_reason,
-        )
-        track_csv_path = paths.outputs_metrics / "track_comparison.csv"
-        track_md_path = paths.outputs_metrics / "track_comparison.md"
-        placeholder_frame.to_csv(track_csv_path, index=False)
-        track_md_path.write_text(placeholder_markdown, encoding="utf-8")
-        state.artifacts["track_comparison_csv"] = track_csv_path
-        state.artifacts["track_comparison_md"] = track_md_path
-
     LOGGER.info("Phase: decision layer")
     fallback_decision_threshold = min(max(float(decision_cost) / max(float(decision_loss), 1e-12), 0.0), 1.0)
     threshold_opt_payload = {
@@ -197,6 +161,81 @@ def run_evaluation_and_decision_phase(
         decision_score_basis = "target_passthrough"
         decision_score = target.astype(float)
 
+    if bayesian_oof_score is not None and bayesian_headline_eligible:
+        valid_bayesian_mask = pd.to_numeric(bayesian_oof_score, errors="coerce").notna() & pd.to_numeric(
+            target,
+            errors="coerce",
+        ).notna()
+        if bool(valid_bayesian_mask.any()):
+            bayesian_probs = pd.to_numeric(bayesian_oof_score.loc[valid_bayesian_mask], errors="coerce").clip(0.0, 1.0)
+            bayesian_true = pd.to_numeric(target.loc[valid_bayesian_mask], errors="coerce").fillna(0).astype(int)
+            bayesian_pred = (bayesian_probs >= float(decision_threshold_used)).astype(int)
+            bayesian_metrics = dict(bayesian_metrics)
+            bayesian_metrics["precision"] = float(precision_score(bayesian_true, bayesian_pred, zero_division=0))
+            bayesian_metrics["recall"] = float(recall_score(bayesian_true, bayesian_pred, zero_division=0))
+            bayesian_metrics["f1"] = float(f1_score(bayesian_true, bayesian_pred, zero_division=0))
+            bayesian_metrics["kappa"] = float(cohen_kappa_score(bayesian_true, bayesian_pred))
+            bayesian_metrics["threshold_used"] = float(decision_threshold_used)
+            safe_write_json_fn(bayesian_metrics, paths.outputs_metrics / "bayesian_metrics.json")
+            state.artifacts["bayesian_metrics"] = paths.outputs_metrics / "bayesian_metrics.json"
+
+    LOGGER.info("Phase: evaluation")
+    comparison_table = None
+    if baseline_headline_eligible and bayesian_headline_eligible and not suppress_headline_comparison:
+        comparison_outputs = export_track_comparison_fn(
+            baseline_metrics=baseline_metrics,
+            bayesian_metrics=bayesian_metrics,
+            output_dir=paths.outputs_metrics,
+            filename_prefix="track_comparison",
+            include_wide_csv=export_detailed_csv,
+        )
+        state.artifacts["track_comparison_long_csv"] = comparison_outputs["long_csv"]
+        state.artifacts["track_comparison_markdown"] = comparison_outputs["markdown"]
+        state.artifacts["track_comparison_csv"] = comparison_outputs["long_csv"]
+        state.artifacts["track_comparison_md"] = comparison_outputs["markdown"]
+        if "wide_csv" in comparison_outputs:
+            state.artifacts["track_comparison_wide_csv"] = comparison_outputs["wide_csv"]
+
+        comparison_table = build_comparison_table_fn(
+            baseline_metrics=baseline_metrics,
+            bayesian_metrics=bayesian_metrics,
+        )
+    else:
+        LOGGER.info("Track comparison skipped because one or both tracks are unavailable or run is degraded")
+
+    if "track_comparison_csv" not in state.artifacts or "track_comparison_md" not in state.artifacts:
+        track_reason = "degraded_run_or_missing_track_metrics"
+        placeholder_frame, placeholder_markdown = build_contract_track_comparison_placeholder(
+            run_id=run_id,
+            reason=track_reason,
+        )
+        track_csv_path = paths.outputs_metrics / "track_comparison.csv"
+        track_md_path = paths.outputs_metrics / "track_comparison.md"
+        placeholder_frame.to_csv(track_csv_path, index=False)
+        track_md_path.write_text(placeholder_markdown, encoding="utf-8")
+        state.artifacts["track_comparison_csv"] = track_csv_path
+        state.artifacts["track_comparison_md"] = track_md_path
+
+    threshold_cases_series = pd.Series(np.nan, index=labeled_df.index, dtype="float64")
+    if "outbreak_threshold" in labeled_df.columns:
+        threshold_cases_series = pd.to_numeric(labeled_df["outbreak_threshold"], errors="coerce")
+    else:
+        threshold_columns = sorted(
+            [
+                column
+                for column in labeled_df.columns
+                if isinstance(column, str) and column.startswith("threshold_p")
+            ]
+        )
+        if threshold_columns:
+            threshold_cases_series = pd.to_numeric(labeled_df[threshold_columns[-1]], errors="coerce")
+    threshold_default = pd.to_numeric(
+        pd.Series([bayesian_sampling_diagnostics.get("threshold_default", np.nan)]),
+        errors="coerce",
+    ).iloc[0]
+    if pd.notna(threshold_default):
+        threshold_cases_series = threshold_cases_series.fillna(float(threshold_default))
+
     decision_frame = pd.DataFrame(index=labeled_df.index)
     decision_frame["run_id"] = run_id
     decision_frame["date"] = labeled_df.get("date", pd.Series(pd.NaT, index=labeled_df.index))
@@ -205,7 +244,7 @@ def run_evaluation_and_decision_phase(
     decision_frame["risk_mean"] = decision_frame["risk_score"]
     decision_frame["risk_q05"] = decision_frame["risk_score"]
     decision_frame["risk_q95"] = decision_frame["risk_score"]
-    decision_frame["threshold_cases"] = float("nan")
+    decision_frame["threshold_cases"] = pd.to_numeric(threshold_cases_series, errors="coerce")
     decision_frame["risk_score_basis"] = decision_score_basis
     decision_frame["decision_threshold_used"] = float(decision_threshold_used)
     decision_frame["decision_cost"] = float(decision_cost)

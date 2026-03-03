@@ -9,7 +9,6 @@ compute_backend:
 
 baseline_models:
   - rule_based_threshold
-  - logistic_regression
   - poisson_regression
   - random_forest
   - xgboost
