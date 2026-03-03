@@ -28,11 +28,10 @@
   "cv_fold_ledger_path": "/home/priyodip/chikungunya-early-warningV4-Brazil-/outputs/models/baselines/fold_ledger.json",
   "models": [
     "rule_based_threshold",
-    "logistic_regression",
     "poisson_regression",
     "random_forest",
     "xgboost"
   ],
-  "n_rows": 84378,
-  "target_positive_rate": 0.14733698357391736
+  "n_rows": 15288,
+  "target_positive_rate": 0.1292517006802721
 }

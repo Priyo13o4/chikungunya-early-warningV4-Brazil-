@@ -38,8 +38,8 @@ python run_pipeline.py \
   --start-year 2015 \
   --end-year 2025 \
   --bayesian-chains 2 \
-  --bayesian-tune 300 \
-  --bayesian-draws 300 \
+  --bayesian-tune 200 \
+  --bayesian-draws 200 \
   --bayesian-progress \
   --skip-visualizations \
   --no-strict-feature-gate \
@@ -47,11 +47,18 @@ python run_pipeline.py \
   2>&1 | tee logs_low_budget.txt
 
 # 5) Debug profile run on narrow time slice (helps isolate failures quickly)
-python run_pipeline.py \
+python -u run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
+  --model-config config/model_config.yaml \
+  --cv-config config/cv_config.yaml \
   --start-year 2019 \
   --end-year 2020 \
-  --bayesian-profile-mode final \
+  --bayesian-profile-mode cv \
+  --bayesian-chains 2 \
+  --bayesian-tune 200 \
+  --bayesian-draws 200 \
+  --bayesian-target-accept 0.85 \
+  --bayesian-max-treedepth 8 \
   --bayesian-progress \
   --skip-visualizations \
   --no-strict-feature-gate \
@@ -208,9 +215,4 @@ Ctrl + b + Arrow Key
 
 ---## 🧹 Clear Scrollback Buffer
 
-To clear the scrollback buffer in tmux:
-
-1. Press `Ctrl + b`
-2. Press `Ctrl + L`
-
-This clears the current pane's scrollback buffer, which is useful when you're dealing with large outputs and want to clean up the view.
+clear

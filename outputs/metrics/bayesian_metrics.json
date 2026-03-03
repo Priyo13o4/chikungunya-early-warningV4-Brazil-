@@ -1,9 +1,6 @@
 {
-  "accuracy": 0.6452820362594799,
-  "brier": 0.27209225070978416,
-  "false_alarm_rate": 0.2559303689005141,
-  "roc_auc": 0.6115629642491008,
-  "pr_auc": 0.35732372922339617,
-  "lead_time_mean": 0.5902810862315389,
-  "lead_time_utility": 0.5393044306812768
+  "run_id": "20260303T103358Z-0bb9a003",
+  "track": "bayesian_oof",
+  "suppressed": true,
+  "reason": "bayesian_headline_not_available"
 }

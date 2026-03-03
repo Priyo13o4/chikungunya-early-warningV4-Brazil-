@@ -1,2 +1,2 @@
 run_id,mode_used,degraded_mode,fallback_used,converged,divergences,divergence_threshold,max_tree_depth,max_tree_depth_threshold,r_hat_max,rhat_threshold,ess_min,ess_threshold
-20260302T121242Z-81d2bf84,full_latent_ar,False,False,False,0.0,25.0,10.0,12.0,1.0182192964990533,1.05,185.55857169479708,200.0
+20260303T103358Z-0bb9a003,full_latent_ar,False,False,False,0.0,25.0,8.0,8.0,1.080330704684938,1.05,31.558506317987145,200.0
