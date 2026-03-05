@@ -337,3 +337,97 @@ def plot_tracka_model_score_comparison(
     fig.suptitle("Track A Model Comparison (All Scores)")
     fig.tight_layout(rect=(0.0, 0.02, 1.0, 0.96))
     return _save_figure(fig, output_dir, filename)
+
+
+def plot_calibration_curve_comparison(
+    y_true: Sequence[int] | pd.Series,
+    bayesian_score: Sequence[float] | pd.Series,
+    baseline_score: Sequence[float] | pd.Series,
+    n_bins: int = 10,
+    filename: str = "thesis_calibration_comparison.png",
+    output_dir: Path | None = None,
+) -> Path:
+    """Plot reliability curves comparing Bayesian and baseline probabilities."""
+    y = pd.to_numeric(pd.Series(y_true, copy=False), errors="coerce")
+    bayes = pd.to_numeric(pd.Series(bayesian_score, copy=False), errors="coerce").clip(0.0, 1.0)
+    base = pd.to_numeric(pd.Series(baseline_score, copy=False), errors="coerce").clip(0.0, 1.0)
+
+    bayes_mask = y.notna() & bayes.notna() & np.isfinite(y) & np.isfinite(bayes)
+    base_mask = y.notna() & base.notna() & np.isfinite(y) & np.isfinite(base)
+    if int(bayes_mask.sum()) < max(10, n_bins) or int(base_mask.sum()) < max(10, n_bins):
+        raise ValueError("Not enough valid rows to compute calibration comparison curves.")
+
+    y_bayes = y.loc[bayes_mask].astype(int)
+    y_base = y.loc[base_mask].astype(int)
+    bayes_prob_true, bayes_prob_pred = calibration_curve(y_bayes, bayes.loc[bayes_mask], n_bins=n_bins, strategy="quantile")
+    base_prob_true, base_prob_pred = calibration_curve(y_base, base.loc[base_mask], n_bins=n_bins, strategy="quantile")
+
+    fig, ax = plt.subplots(figsize=(7.5, 6.2))
+    ax.plot(bayes_prob_pred, bayes_prob_true, marker="o", label="Bayesian", color="tab:orange")
+    ax.plot(base_prob_pred, base_prob_true, marker="s", label="Baseline", color="tab:blue")
+    ax.plot([0, 1], [0, 1], linestyle="--", color="grey", label="Perfect Calibration")
+    ax.set_xlabel("Mean Predicted Probability")
+    ax.set_ylabel("Observed Frequency")
+    ax.set_title("Calibration Curve: Bayesian vs Baseline")
+    ax.legend(loc="upper left")
+    return _save_figure(fig, output_dir, filename)
+
+
+def plot_threshold_costloss_curve(
+    y_true: Sequence[int] | pd.Series,
+    y_score: Sequence[float] | pd.Series,
+    filename: str = "thesis_threshold_costloss_curve.png",
+    output_dir: Path | None = None,
+) -> Path:
+    """Plot recall/FAR/accuracy trade-offs across thresholds with a highlighted recall=1 point."""
+    y = pd.to_numeric(pd.Series(y_true, copy=False), errors="coerce")
+    score = pd.to_numeric(pd.Series(y_score, copy=False), errors="coerce").clip(0.0, 1.0)
+    valid_mask = y.notna() & score.notna() & np.isfinite(y) & np.isfinite(score)
+    if int(valid_mask.sum()) < 10:
+        raise ValueError("Not enough valid rows for threshold tradeoff curve.")
+
+    yv = y.loc[valid_mask].astype(int).to_numpy(dtype=int)
+    sv = score.loc[valid_mask].to_numpy(dtype=float)
+    thresholds = np.linspace(0.0, 1.0, 101)
+
+    recall_list: list[float] = []
+    far_list: list[float] = []
+    acc_list: list[float] = []
+    for thr in thresholds:
+        pred = (sv >= thr).astype(int)
+        tp = float(np.sum((pred == 1) & (yv == 1)))
+        tn = float(np.sum((pred == 0) & (yv == 0)))
+        fp = float(np.sum((pred == 1) & (yv == 0)))
+        fn = float(np.sum((pred == 0) & (yv == 1)))
+        recall = tp / max(tp + fn, 1.0)
+        far = fp / max(fp + tn, 1.0)
+        acc = (tp + tn) / max(tp + tn + fp + fn, 1.0)
+        recall_list.append(float(recall))
+        far_list.append(float(far))
+        acc_list.append(float(acc))
+
+    recall_arr = np.asarray(recall_list, dtype=float)
+    far_arr = np.asarray(far_list, dtype=float)
+    acc_arr = np.asarray(acc_list, dtype=float)
+
+    recall_one_indices = np.where(recall_arr >= 0.999999)[0]
+    highlight_idx = int(recall_one_indices[-1]) if recall_one_indices.size else int(np.argmax(recall_arr))
+
+    fig, ax = plt.subplots(figsize=(8.2, 6.0))
+    ax.plot(thresholds, recall_arr, label="Recall", color="tab:green")
+    ax.plot(thresholds, far_arr, label="False Alarm Rate", color="tab:red")
+    ax.plot(thresholds, acc_arr, label="Accuracy", color="tab:blue")
+    ax.axvline(thresholds[highlight_idx], color="black", linestyle="--", linewidth=1.0)
+    ax.scatter(
+        [thresholds[highlight_idx]],
+        [recall_arr[highlight_idx]],
+        color="black",
+        zorder=5,
+        label=f"Operating point (thr={thresholds[highlight_idx]:.2f}, recall={recall_arr[highlight_idx]:.2f})",
+    )
+    ax.set_xlabel("Decision Threshold")
+    ax.set_ylabel("Metric Value")
+    ax.set_ylim(0.0, 1.02)
+    ax.set_title("Threshold / Cost-Loss Trade-off")
+    ax.legend(loc="best")
+    return _save_figure(fig, output_dir, filename)

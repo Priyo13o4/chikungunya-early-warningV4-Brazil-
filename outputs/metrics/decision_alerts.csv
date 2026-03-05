@@ -1,0 +1,9 @@
+run_id,date,district,risk_score,risk_mean,risk_q05,risk_q95,threshold_cases,risk_score_basis,decision_threshold_used,decision_cost,decision_loss,alert_threshold_yellow,alert_threshold_orange,alert_threshold_red,decision_policy_version,alert_level,recommended_action
+20260305T082730Z-cbe2e90e,2016-01-03,A,0.0,0.0,0.0,0.0,4.600000000000001,target_passthrough,0.16666666666666669,0.2,1.0,0.3,0.5,0.7,v1,NO_ACTION,0
+20260305T082730Z-cbe2e90e,2016-01-10,A,0.0,0.0,0.0,0.0,4.600000000000001,target_passthrough,0.16666666666666669,0.2,1.0,0.3,0.5,0.7,v1,NO_ACTION,0
+20260305T082730Z-cbe2e90e,2016-01-17,A,1.0,1.0,1.0,1.0,4.600000000000001,target_passthrough,0.16666666666666669,0.2,1.0,0.3,0.5,0.7,v1,RED,1
+20260305T082730Z-cbe2e90e,2016-01-24,A,0.0,0.0,0.0,0.0,4.600000000000001,target_passthrough,0.16666666666666669,0.2,1.0,0.3,0.5,0.7,v1,NO_ACTION,0
+20260305T082730Z-cbe2e90e,2016-01-31,B,0.0,0.0,0.0,0.0,6.800000000000001,target_passthrough,0.16666666666666669,0.2,1.0,0.3,0.5,0.7,v1,NO_ACTION,0
+20260305T082730Z-cbe2e90e,2016-02-07,B,0.0,0.0,0.0,0.0,6.800000000000001,target_passthrough,0.16666666666666669,0.2,1.0,0.3,0.5,0.7,v1,NO_ACTION,0
+20260305T082730Z-cbe2e90e,2016-02-14,B,1.0,1.0,1.0,1.0,6.800000000000001,target_passthrough,0.16666666666666669,0.2,1.0,0.3,0.5,0.7,v1,RED,1
+20260305T082730Z-cbe2e90e,2016-02-21,B,0.0,0.0,0.0,0.0,6.800000000000001,target_passthrough,0.16666666666666669,0.2,1.0,0.3,0.5,0.7,v1,NO_ACTION,0

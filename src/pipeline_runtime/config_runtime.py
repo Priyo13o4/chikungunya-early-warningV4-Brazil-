@@ -27,6 +27,7 @@ _DEFAULT_BAYESIAN_CLIMATE_COVARIATES: tuple[str, ...] = (
 )
 _BAYESIAN_COVARIATE_MIN_VARIANCE: float = 1e-12
 _BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX: float = 0.01
+_BAYESIAN_COVARIATE_NULL_RATE_RESTORE_NAMES: set[str] = {"temperature", "humidity"}
 _SUPPORTED_BAYESIAN_PROFILE_MODES: set[str] = {"cv", "final", "dev"}
 _BAYESIAN_PROFILE_KEYS: tuple[str, ...] = (
     "chains",
@@ -275,11 +276,20 @@ def select_bayesian_covariates_by_availability(
         availability_rate = float(non_null_count / max(row_count, 1))
         null_rate = float(1.0 - availability_rate)
         variance = float(numeric.var(ddof=0)) if non_null_count > 0 else 0.0
+        preserve_for_imputation = bool(
+            str(covariate).strip().lower() in _BAYESIAN_COVARIATE_NULL_RATE_RESTORE_NAMES
+            and non_null_count > 0
+            and row_count > 0
+        )
 
         reason: str | None = None
         if row_count <= 0:
             reason = "no_rows"
-        elif non_null_count < row_count and null_rate >= float(_BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX):
+        elif (
+            non_null_count < row_count
+            and null_rate > float(_BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX)
+            and not preserve_for_imputation
+        ):
             reason = "null_or_non_numeric_values"
         elif variance <= float(min_variance):
             reason = "degenerate_variance"
@@ -294,10 +304,18 @@ def select_bayesian_covariates_by_availability(
             "availability_rate": availability_rate,
             "null_rate": null_rate,
             "variance": variance,
+            "preserved_for_imputation": preserve_for_imputation,
             "imputation_required": bool(non_null_count < row_count and row_count > 0),
             "imputation_strategy": (
                 "forward_fill_then_district_median"
-                if non_null_count < row_count and row_count > 0 and null_rate < float(_BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX)
+                if (
+                    non_null_count < row_count
+                    and row_count > 0
+                    and (
+                        null_rate < float(_BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX)
+                        or preserve_for_imputation
+                    )
+                )
                 else None
             ),
         }
@@ -399,6 +417,12 @@ def resolve_adapter_callable(
 ) -> Callable[..., Any]:
     configured = adapter_config.get(key)
     if not configured:
+        if key == "label_outbreaks":
+            LOGGER.warning(
+                "adapter_fail_label_outbreaks_fallback | key=%s, reason=missing_configured_callable, default=%s",
+                key,
+                default.__name__,
+            )
         return default
     try:
         loaded = import_callable(str(configured))
@@ -410,6 +434,13 @@ def resolve_adapter_callable(
             import_error,
             default.__name__,
         )
+        if key == "label_outbreaks":
+            LOGGER.warning(
+                "adapter_fail_label_outbreaks_fallback | key=%s, reason=import_failure, configured=%s, default=%s",
+                key,
+                configured,
+                default.__name__,
+            )
         return default
     LOGGER.info("Adapter callable enabled for '%s': %s", key, configured)
     return loaded
@@ -478,6 +509,7 @@ def resolve_cv_config(
         first_valid_year=int(first_valid_year),
         last_valid_year=int(last_valid_year),
         train_window_years=int(raw_cv_config.get("train_window_years", 5)),
+        label_horizon_steps=max(1, int(raw_cv_config.get("label_horizon_steps", 1))),
         thesis_strict=_as_bool(raw_cv_config.get("thesis_strict", False), False),
         thesis_strict_mode=str(raw_cv_config.get("thesis_strict_mode", "expanding")),
         skip_single_class_folds=_as_bool(raw_cv_config.get("skip_single_class_folds", True), True),

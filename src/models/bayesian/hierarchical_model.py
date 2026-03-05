@@ -348,6 +348,9 @@ class HierarchicalBayesianModel:
         if self.idata_ is None:
             risk_frame = pd.DataFrame(
                 {
+                    "cases_mean": mu_mean,
+                    "cases_q05": mu_mean,
+                    "cases_q95": mu_mean,
                     "risk_mean": risk_mean_point,
                     "risk_q05": risk_mean_point,
                     "risk_q95": risk_mean_point,
@@ -443,6 +446,9 @@ class HierarchicalBayesianModel:
             risk_mean = np.empty(n_rows, dtype=np.float64)
             risk_q05 = np.empty(n_rows, dtype=np.float64)
             risk_q95 = np.empty(n_rows, dtype=np.float64)
+            cases_mean = np.empty(n_rows, dtype=np.float64)
+            cases_q05 = np.empty(n_rows, dtype=np.float64)
+            cases_q95 = np.empty(n_rows, dtype=np.float64)
 
             alpha_draws_f32 = alpha_draws.astype(np.float32, copy=False)
             beta_draws_f32 = beta_draws.astype(np.float32, copy=False)
@@ -473,12 +479,18 @@ class HierarchicalBayesianModel:
                         threshold_chunk,
                     ).astype(np.float32, copy=False)
 
+                cases_mean[row_slice] = np.mean(mu_draws, axis=1, dtype=np.float64)
+                cases_q05[row_slice] = np.quantile(mu_draws, 0.05, axis=1)
+                cases_q95[row_slice] = np.quantile(mu_draws, 0.95, axis=1)
                 risk_mean[row_slice] = np.mean(risk_draws, axis=1, dtype=np.float64)
                 risk_q05[row_slice] = np.quantile(risk_draws, 0.05, axis=1)
                 risk_q95[row_slice] = np.quantile(risk_draws, 0.95, axis=1)
 
             risk_frame = pd.DataFrame(
                 {
+                    "cases_mean": cases_mean,
+                    "cases_q05": cases_q05,
+                    "cases_q95": cases_q95,
                     "risk_mean": risk_mean,
                     "risk_q05": risk_q05,
                     "risk_q95": risk_q95,
@@ -499,6 +511,9 @@ class HierarchicalBayesianModel:
             LOGGER.warning("Posterior uncertainty prediction degraded to point estimate: %s", predictive_error)
             risk_frame = pd.DataFrame(
                 {
+                    "cases_mean": mu_mean,
+                    "cases_q05": mu_mean,
+                    "cases_q95": mu_mean,
                     "risk_mean": risk_mean_point,
                     "risk_q05": risk_mean_point,
                     "risk_q95": risk_mean_point,

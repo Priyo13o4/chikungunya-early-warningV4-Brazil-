@@ -6,12 +6,89 @@ from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import cohen_kappa_score, f1_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, cohen_kappa_score, f1_score, precision_score, recall_score
 
+from src.evaluation.metrics_baselines import evaluate_baseline_predictions
 from src.pipeline_runtime.io_artifacts import build_contract_track_comparison_placeholder, write_bayesian_convergence_summary
 from src.pipeline_runtime.phase_context import EvalDecisionPhaseResult, SharedPhaseState
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _build_threshold_grid(*, grid_size: int, grid_min: float, grid_max: float) -> list[float]:
+    clipped_min = float(min(max(grid_min, 0.0), 1.0))
+    clipped_max = float(min(max(grid_max, 0.0), 1.0))
+    if clipped_max < clipped_min:
+        clipped_min, clipped_max = clipped_max, clipped_min
+    safe_grid_size = max(int(grid_size), 2)
+    return [float(value) for value in np.linspace(clipped_min, clipped_max, num=safe_grid_size)]
+
+
+def _optimize_balanced_bayesian_threshold(
+    *,
+    y_true: pd.Series,
+    probabilities: pd.Series,
+    fallback_threshold: float,
+    min_samples: int,
+    grid_size: int,
+    grid_min: float,
+    grid_max: float,
+) -> dict[str, Any]:
+    y = pd.to_numeric(y_true, errors="coerce")
+    probs = pd.to_numeric(probabilities, errors="coerce")
+    valid = y.notna() & probs.notna()
+    y_valid = y.loc[valid].astype(int)
+    probs_valid = probs.loc[valid].astype(float).clip(0.0, 1.0)
+    sample_size = int(len(y_valid))
+
+    payload: dict[str, Any] = {
+        "threshold": float(min(max(fallback_threshold, 0.0), 1.0)),
+        "f1": float("nan"),
+        "accuracy": float("nan"),
+        "sample_size": sample_size,
+        "optimized": False,
+        "method": "fallback_balanced_threshold",
+        "objective_primary": "f1",
+        "objective_tiebreaker": "accuracy",
+    }
+    if sample_size < int(min_samples) or y_valid.nunique(dropna=True) < 2:
+        return payload
+
+    candidates = _build_threshold_grid(
+        grid_size=int(grid_size),
+        grid_min=float(grid_min),
+        grid_max=float(grid_max),
+    )
+    best_threshold = float(payload["threshold"])
+    best_f1 = float("-inf")
+    best_accuracy = float("-inf")
+    for threshold in candidates:
+        pred = (probs_valid >= float(threshold)).astype(int)
+        trial_f1 = float(f1_score(y_valid, pred, zero_division=0))
+        trial_accuracy = float(accuracy_score(y_valid, pred))
+        if (
+            trial_f1 > best_f1
+            or (np.isclose(trial_f1, best_f1) and trial_accuracy > best_accuracy)
+            or (
+                np.isclose(trial_f1, best_f1)
+                and np.isclose(trial_accuracy, best_accuracy)
+                and abs(float(threshold) - float(fallback_threshold)) < abs(best_threshold - float(fallback_threshold))
+            )
+        ):
+            best_f1 = float(trial_f1)
+            best_accuracy = float(trial_accuracy)
+            best_threshold = float(threshold)
+
+    return {
+        "threshold": float(best_threshold),
+        "f1": float(best_f1),
+        "accuracy": float(best_accuracy),
+        "sample_size": sample_size,
+        "optimized": True,
+        "method": "empirical_balanced_oof",
+        "objective_primary": "f1",
+        "objective_tiebreaker": "accuracy",
+    }
 
 
 def run_evaluation_and_decision_phase(
@@ -101,7 +178,10 @@ def run_evaluation_and_decision_phase(
     state.artifacts["degraded_run"] = degraded_run_path
 
     LOGGER.info("Phase: decision layer")
-    fallback_decision_threshold = min(max(float(decision_cost) / max(float(decision_loss), 1e-12), 0.0), 1.0)
+    fallback_decision_threshold = min(
+        max(float(decision_cost) / max(float(decision_cost) + float(decision_loss), 1e-12), 0.0),
+        1.0,
+    )
     threshold_opt_payload = {
         "threshold": float(fallback_decision_threshold),
         "objective_cost": float("nan"),
@@ -130,6 +210,27 @@ def run_evaluation_and_decision_phase(
         )
 
     decision_threshold_used = float(threshold_opt_payload.get("threshold", fallback_decision_threshold))
+    balanced_threshold_payload: dict[str, Any] = {
+        "threshold": float(decision_threshold_used),
+        "f1": float("nan"),
+        "accuracy": float("nan"),
+        "sample_size": 0,
+        "optimized": False,
+        "method": "bayesian_oof_not_available",
+        "objective_primary": "f1",
+        "objective_tiebreaker": "accuracy",
+    }
+    if bayesian_oof_score is not None:
+        balanced_threshold_payload = _optimize_balanced_bayesian_threshold(
+            y_true=target,
+            probabilities=bayesian_oof_score,
+            fallback_threshold=float(decision_threshold_used),
+            min_samples=int(decision_optimization_min_samples),
+            grid_size=int(decision_optimization_grid_size),
+            grid_min=float(decision_optimization_grid_min),
+            grid_max=float(decision_optimization_grid_max),
+        )
+    balanced_threshold_used = float(balanced_threshold_payload.get("threshold", decision_threshold_used))
 
     decision_score: pd.Series | None = None
     decision_score_basis = "target_passthrough"
@@ -176,8 +277,51 @@ def run_evaluation_and_decision_phase(
             bayesian_metrics["f1"] = float(f1_score(bayesian_true, bayesian_pred, zero_division=0))
             bayesian_metrics["kappa"] = float(cohen_kappa_score(bayesian_true, bayesian_pred))
             bayesian_metrics["threshold_used"] = float(decision_threshold_used)
+
+            bayesian_pred_balanced = (bayesian_probs >= float(balanced_threshold_used)).astype(int)
+            bayesian_metrics["balanced_threshold_used"] = float(balanced_threshold_used)
+            bayesian_metrics["balanced_threshold_optimized"] = bool(
+                balanced_threshold_payload.get("optimized", False)
+            )
+            bayesian_metrics["balanced_threshold_sample_size"] = int(
+                balanced_threshold_payload.get("sample_size", 0) or 0
+            )
+            bayesian_metrics["balanced_threshold_accuracy"] = float(accuracy_score(bayesian_true, bayesian_pred_balanced))
+            bayesian_metrics["balanced_threshold_precision"] = float(
+                precision_score(bayesian_true, bayesian_pred_balanced, zero_division=0)
+            )
+            bayesian_metrics["balanced_threshold_recall"] = float(
+                recall_score(bayesian_true, bayesian_pred_balanced, zero_division=0)
+            )
+            bayesian_metrics["balanced_threshold_f1"] = float(
+                f1_score(bayesian_true, bayesian_pred_balanced, zero_division=0)
+            )
+            bayesian_metrics["balanced_threshold_kappa"] = float(cohen_kappa_score(bayesian_true, bayesian_pred_balanced))
             safe_write_json_fn(bayesian_metrics, paths.outputs_metrics / "bayesian_metrics.json")
             state.artifacts["bayesian_metrics"] = paths.outputs_metrics / "bayesian_metrics.json"
+
+    if baseline_oof_score is not None and baseline_headline_eligible:
+        valid_baseline_mask = pd.to_numeric(baseline_oof_score, errors="coerce").notna() & pd.to_numeric(
+            target,
+            errors="coerce",
+        ).notna()
+        if bool(valid_baseline_mask.any()):
+            baseline_recomputed = evaluate_baseline_predictions(
+                y_true=pd.to_numeric(target.loc[valid_baseline_mask], errors="coerce").fillna(0).astype(int),
+                y_pred_proba=pd.to_numeric(baseline_oof_score.loc[valid_baseline_mask], errors="coerce").clip(0.0, 1.0),
+                threshold=float(decision_threshold_used),
+                temporal_index=temporal_index.loc[valid_baseline_mask] if temporal_index is not None else None,
+                district=district_index.loc[valid_baseline_mask] if district_index is not None else None,
+            )
+            baseline_metrics = dict(baseline_metrics)
+            if baseline_metrics:
+                for key in list(baseline_metrics.keys()):
+                    if key in baseline_recomputed:
+                        baseline_metrics[key] = float(baseline_recomputed[key])
+            else:
+                baseline_metrics = {key: float(value) for key, value in baseline_recomputed.items()}
+            safe_write_json_fn(baseline_metrics, paths.outputs_metrics / "baseline_metrics.json")
+            state.artifacts["baseline_metrics"] = paths.outputs_metrics / "baseline_metrics.json"
 
     LOGGER.info("Phase: evaluation")
     comparison_table = None
@@ -235,6 +379,15 @@ def run_evaluation_and_decision_phase(
     ).iloc[0]
     if pd.notna(threshold_default):
         threshold_cases_series = threshold_cases_series.fillna(float(threshold_default))
+    threshold_cases_series = pd.to_numeric(threshold_cases_series, errors="coerce")
+    threshold_cases_clamp_mask = threshold_cases_series.notna() & (threshold_cases_series <= 0.0)
+    threshold_cases_clamp_count = int(threshold_cases_clamp_mask.sum())
+    if threshold_cases_clamp_count > 0:
+        threshold_cases_series.loc[threshold_cases_clamp_mask] = 1.0
+        LOGGER.warning(
+            "Applied sentinel clamp for non-positive threshold_cases in decision/evaluation layer: clamped_rows=%d",
+            threshold_cases_clamp_count,
+        )
 
     decision_frame = pd.DataFrame(index=labeled_df.index)
     decision_frame["run_id"] = run_id
@@ -244,7 +397,7 @@ def run_evaluation_and_decision_phase(
     decision_frame["risk_mean"] = decision_frame["risk_score"]
     decision_frame["risk_q05"] = decision_frame["risk_score"]
     decision_frame["risk_q95"] = decision_frame["risk_score"]
-    decision_frame["threshold_cases"] = pd.to_numeric(threshold_cases_series, errors="coerce")
+    decision_frame["threshold_cases"] = threshold_cases_series
     decision_frame["risk_score_basis"] = decision_score_basis
     decision_frame["decision_threshold_used"] = float(decision_threshold_used)
     decision_frame["decision_cost"] = float(decision_cost)
@@ -357,6 +510,22 @@ def run_evaluation_and_decision_phase(
                 "method": str(threshold_opt_payload.get("method", "fallback_cost_loss_ratio")),
                 "threshold": float(decision_threshold_used),
             },
+            "bayesian_balanced_threshold_sweep": {
+                "enabled": bool(bayesian_oof_score is not None),
+                "sample_size": int(balanced_threshold_payload.get("sample_size", 0) or 0),
+                "optimized": bool(balanced_threshold_payload.get("optimized", False)),
+                "method": str(balanced_threshold_payload.get("method", "fallback_balanced_threshold")),
+                "threshold": float(balanced_threshold_used),
+                "f1": float(balanced_threshold_payload.get("f1", float("nan"))),
+                "accuracy": float(balanced_threshold_payload.get("accuracy", float("nan"))),
+                "objective_primary": str(balanced_threshold_payload.get("objective_primary", "f1")),
+                "objective_tiebreaker": str(balanced_threshold_payload.get("objective_tiebreaker", "accuracy")),
+                "grid_size": int(max(int(decision_optimization_grid_size), 2)),
+                "grid_min": float(min(max(float(decision_optimization_grid_min), 0.0), 1.0)),
+                "grid_max": float(min(max(float(decision_optimization_grid_max), 0.0), 1.0)),
+            },
+            "threshold_cases_clamp_count": int(threshold_cases_clamp_count),
+            "threshold_cases_clamp_applied": bool(threshold_cases_clamp_count > 0),
             "bayesian_profile_usage": bayesian_sampling_diagnostics.get("bayesian_profile_usage", bayesian_profile_usage),
             "cv_subset_mode_active": bool(
                 bayesian_sampling_diagnostics.get("cv_subset_mode_active", cv_subset_mode_active)

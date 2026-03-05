@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from config.paths import get_paths
@@ -184,4 +185,94 @@ def plot_alerts_map(
     axes[1].set_title("District Alert Levels")
     axes[1].axis("off")
 
+    return _save_figure(fig, output_dir, filename)
+
+
+def plot_geofaceted_risk_vs_baseline(
+    frame: pd.DataFrame,
+    *,
+    district_col: str = "district",
+    state_col: str = "state",
+    bayesian_risk_col: str = "bayesian_risk",
+    baseline_alarm_col: str = "baseline_alarm",
+    filename: str = "thesis_spatial_risk_map.png",
+    output_dir: Path | None = None,
+    max_states: int = 9,
+    max_districts_per_state: int = 25,
+) -> Path:
+    """Geofaceted tile-map style comparison: Bayesian risk vs baseline binary alarms."""
+    required = {district_col, state_col, bayesian_risk_col, baseline_alarm_col}
+    if not required.issubset(frame.columns):
+        raise ValueError(f"Input frame missing required columns: {sorted(required.difference(frame.columns))}")
+
+    data = frame.loc[:, [district_col, state_col, bayesian_risk_col, baseline_alarm_col]].copy()
+    data[district_col] = data[district_col].astype(str)
+    data[state_col] = data[state_col].astype(str)
+    data[bayesian_risk_col] = pd.to_numeric(data[bayesian_risk_col], errors="coerce")
+    data[baseline_alarm_col] = pd.to_numeric(data[baseline_alarm_col], errors="coerce")
+    data = data.dropna(subset=[district_col, state_col, bayesian_risk_col, baseline_alarm_col])
+    if data.empty:
+        raise ValueError("No valid rows available for geofaceted risk map.")
+
+    summary = (
+        data.groupby([state_col, district_col], dropna=False)
+        .agg(
+            bayesian_risk=(bayesian_risk_col, "mean"),
+            baseline_alarm=(baseline_alarm_col, "mean"),
+        )
+        .reset_index()
+    )
+    if summary.empty:
+        raise ValueError("No grouped rows available for geofaceted risk map.")
+
+    state_rank = summary.groupby(state_col)["bayesian_risk"].mean().sort_values(ascending=False)
+    selected_states = state_rank.head(max_states).index.tolist()
+    summary = summary[summary[state_col].isin(selected_states)].copy()
+
+    summary["district_order"] = (
+        summary.groupby(state_col)["bayesian_risk"]
+        .rank(method="first", ascending=False)
+        .astype(int)
+    )
+    summary = summary[summary["district_order"] <= int(max_districts_per_state)].copy()
+    if summary.empty:
+        raise ValueError("No districts selected for geofaceted risk map.")
+
+    n_states = len(selected_states)
+    n_cols = min(3, n_states)
+    n_rows = int(np.ceil(n_states / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.2 * n_cols, 3.8 * n_rows), squeeze=False)
+    axes_flat = axes.ravel()
+
+    for idx, state in enumerate(selected_states):
+        ax = axes_flat[idx]
+        state_df = summary[summary[state_col] == state].sort_values("district_order")
+        x = np.arange(len(state_df))
+        scatter = ax.scatter(
+            x,
+            state_df["baseline_alarm"].to_numpy(dtype=float),
+            c=state_df["bayesian_risk"].to_numpy(dtype=float),
+            cmap="YlOrRd",
+            vmin=0.0,
+            vmax=1.0,
+            s=40,
+            alpha=0.9,
+            edgecolor="black",
+            linewidth=0.2,
+        )
+        ax.set_title(f"State: {state}")
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_yticks([0, 1])
+        ax.set_yticklabels(["No Alarm", "Alarm"])
+        ax.set_xlabel("District rank by Bayesian risk")
+        ax.set_ylabel("Baseline alarm")
+        ax.grid(axis="y", linestyle="--", alpha=0.25)
+
+    for idx in range(n_states, len(axes_flat)):
+        axes_flat[idx].axis("off")
+
+    cbar = fig.colorbar(scatter, ax=axes_flat[:n_states], fraction=0.025, pad=0.02)
+    cbar.set_label("Bayesian continuous risk")
+    fig.suptitle("Geofaceted Risk Map: Bayesian Risk vs Baseline Binary Alarms")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     return _save_figure(fig, output_dir, filename)

@@ -1,0 +1,161 @@
+{
+  "run_id": "20260305T082730Z-cbe2e90e",
+  "headline_eligible": false,
+  "degraded": true,
+  "converged": null,
+  "convergence_checked": false,
+  "mode_used": "not_run",
+  "fallback_used": false,
+  "degraded_mode": false,
+  "convergence_failure_mode": "warn",
+  "convergence_failure_mode_explicit": false,
+  "convergence_failure_mode_auto_reason": null,
+  "requested_backend": "cpu",
+  "resolved_backend": "cpu",
+  "actual_runtime_backend": "cpu",
+  "backend_implemented": true,
+  "fallback_reason": null,
+  "sampling_backend_requested": "auto",
+  "sampling_backend_effective": "pymc",
+  "sampling_backend_fallback_reason": null,
+  "climate_covariates_requested": [
+    "month_sin",
+    "month_cos",
+    "rainfall",
+    "temperature",
+    "humidity"
+  ],
+  "climate_covariates": [
+    "month_sin",
+    "month_cos",
+    "rainfall",
+    "temperature",
+    "humidity"
+  ],
+  "covariates_requested": [
+    "month_sin",
+    "month_cos",
+    "rainfall",
+    "temperature",
+    "humidity"
+  ],
+  "covariates_effective": [
+    "month_sin",
+    "month_cos",
+    "rainfall",
+    "temperature",
+    "humidity"
+  ],
+  "covariate_selection": {
+    "requested_covariates": [
+      "month_sin",
+      "month_cos",
+      "rainfall",
+      "temperature",
+      "humidity"
+    ],
+    "selected_covariates": [
+      "month_sin",
+      "month_cos",
+      "rainfall",
+      "temperature",
+      "humidity"
+    ],
+    "excluded_covariates": [],
+    "missing_covariates": [],
+    "required_covariates": [
+      "month",
+      "year",
+      "weekofyear"
+    ],
+    "required_covariates_present": true,
+    "viable_count": 5,
+    "requested_count": 5
+  },
+  "compute_backend_requested": "cpu",
+  "compute_backend_effective": "cpu",
+  "compute_backend_runtime": "cpu",
+  "compute_backend_fallback_used": false,
+  "compute_backend_fallback_reason": null,
+  "threshold_basis": "default",
+  "decision_threshold_optimization": {
+    "enabled": true,
+    "risk_basis": "bayesian_oof_risk_mean",
+    "sample_size": 0,
+    "optimized": false,
+    "method": "fallback_cost_loss_ratio",
+    "threshold": 0.16666666666666669
+  },
+  "bayesian_balanced_threshold_sweep": {
+    "enabled": false,
+    "sample_size": 0,
+    "optimized": false,
+    "method": "bayesian_oof_not_available",
+    "threshold": 0.16666666666666669,
+    "f1": null,
+    "accuracy": null,
+    "objective_primary": "f1",
+    "objective_tiebreaker": "accuracy",
+    "grid_size": 101,
+    "grid_min": 0.0,
+    "grid_max": 1.0
+  },
+  "threshold_cases_clamp_count": 0,
+  "threshold_cases_clamp_applied": false,
+  "bayesian_profile_usage": {
+    "profile_mode_override": null,
+    "default_routing": "fullfit=final,oof=cv",
+    "fullfit_profile_name": "final",
+    "oof_profile_name": "cv",
+    "declared_profiles": {
+      "cv": {
+        "chains": 4,
+        "tune": 1000,
+        "draws": 1000,
+        "target_accept": 0.9,
+        "max_treedepth": 12,
+        "bayesian_progress": false
+      },
+      "final": {
+        "chains": 4,
+        "tune": 1000,
+        "draws": 1000,
+        "target_accept": 0.9,
+        "max_treedepth": 12,
+        "bayesian_progress": false
+      },
+      "dev": {
+        "chains": 1,
+        "tune": 120,
+        "draws": 120,
+        "target_accept": 0.9,
+        "max_treedepth": 10,
+        "bayesian_progress": false
+      }
+    },
+    "effective_profile_values": {
+      "fullfit": {
+        "chains": 4,
+        "tune": 1000,
+        "draws": 1000,
+        "target_accept": 0.9,
+        "max_treedepth": 12,
+        "bayesian_progress": false
+      },
+      "oof": {
+        "chains": 4,
+        "tune": 1000,
+        "draws": 1000,
+        "target_accept": 0.9,
+        "max_treedepth": 12,
+        "bayesian_progress": false
+      }
+    },
+    "cv_profile_differs_from_final": false,
+    "cv_vs_final_diff_keys": [],
+    "warning_flags": [],
+    "cv_subset_mode_active": false
+  },
+  "cv_subset_mode_active": false,
+  "bayesian_subset": {}
+}

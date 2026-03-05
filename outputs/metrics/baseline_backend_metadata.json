@@ -1,0 +1,12 @@
+{
+  "run_id": "20260305T082730Z-cbe2e90e",
+  "compute_backend_effective": "macos_metal",
+  "skip_baselines": true,
+  "model_names": [
+    "rule_based_threshold",
+    "poisson_regression",
+    "random_forest",
+    "xgboost"
+  ],
+  "training_config_path": null
+}

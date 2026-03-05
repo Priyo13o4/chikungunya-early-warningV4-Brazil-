@@ -155,3 +155,72 @@ def plot_convergence_comparison(
     ax.set_ylabel("Value")
     ax.legend(loc="best")
     return _save_figure(fig, output_dir, filename)
+
+
+def plot_single_district_cases_with_ci(
+    frame: pd.DataFrame,
+    *,
+    date_col: str = "date",
+    district_col: str = "district",
+    state_col: str = "state",
+    cases_col: str = "cases",
+    cases_mean_col: str = "cases_mean",
+    cases_q05_col: str = "cases_q05",
+    cases_q95_col: str = "cases_q95",
+    preferred_state_tokens: Sequence[str] = ("BA", "BAHIA"),
+    start_year: int = 2015,
+    end_year: int = 2020,
+    filename: str = "thesis_single_district_timeseries.png",
+    output_dir: Path | None = None,
+) -> Path:
+    """Plot observed cases and Bayesian 95% interval for a high-incidence district."""
+    required_cols = {date_col, district_col, cases_col, cases_mean_col, cases_q05_col, cases_q95_col}
+    if not required_cols.issubset(frame.columns):
+        raise ValueError(f"Input frame missing required columns: {sorted(required_cols.difference(frame.columns))}")
+
+    data = frame.loc[:, list(required_cols | ({state_col} if state_col in frame.columns else set()))].copy()
+    data[date_col] = pd.to_datetime(data[date_col], errors="coerce")
+    data[cases_col] = pd.to_numeric(data[cases_col], errors="coerce")
+    data[cases_mean_col] = pd.to_numeric(data[cases_mean_col], errors="coerce")
+    data[cases_q05_col] = pd.to_numeric(data[cases_q05_col], errors="coerce")
+    data[cases_q95_col] = pd.to_numeric(data[cases_q95_col], errors="coerce")
+    data = data.dropna(subset=[date_col, district_col, cases_col, cases_mean_col, cases_q05_col, cases_q95_col])
+    if data.empty:
+        raise ValueError("No valid rows for single-district CI time-series plot.")
+
+    years = data[date_col].dt.year
+    data = data[years.between(int(start_year), int(end_year), inclusive="both")]
+    if data.empty:
+        raise ValueError("No rows available in requested year window for single-district CI plot.")
+
+    if state_col in data.columns:
+        state_values = data[state_col].astype(str).str.upper().str.strip()
+        state_mask = state_values.isin([token.upper() for token in preferred_state_tokens])
+        if state_mask.any():
+            data = data.loc[state_mask]
+
+    district_scores = data.groupby(district_col, dropna=False)[cases_col].sum().sort_values(ascending=False)
+    if district_scores.empty:
+        raise ValueError("No districts found for single-district CI plot.")
+    selected_district = str(district_scores.index[0])
+
+    district_data = data[data[district_col].astype(str) == selected_district].sort_values(date_col)
+    if district_data.empty:
+        raise ValueError("Selected district has no rows for single-district CI plot.")
+
+    fig, ax = plt.subplots(figsize=(12, 5.8))
+    ax.plot(district_data[date_col], district_data[cases_col], color="black", linewidth=1.4, label="Observed cases")
+    ax.plot(district_data[date_col], district_data[cases_mean_col], color="tab:orange", linewidth=1.5, label="Bayesian mean")
+    ax.fill_between(
+        district_data[date_col],
+        district_data[cases_q05_col],
+        district_data[cases_q95_col],
+        color="tab:orange",
+        alpha=0.25,
+        label="Bayesian 95% CI",
+    )
+    ax.set_title(f"Single-District Time Series ({selected_district}, {start_year}-{end_year})")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Weekly cases")
+    ax.legend(loc="best")
+    return _save_figure(fig, output_dir, filename)

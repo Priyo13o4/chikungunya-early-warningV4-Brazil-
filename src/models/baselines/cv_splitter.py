@@ -31,6 +31,7 @@ class TimeSeriesCVConfig:
     first_valid_year: int = 2014
     last_valid_year: int = 2019
     train_window_years: int = 5
+    label_horizon_steps: int = 1
     thesis_strict: bool = False
     thesis_strict_mode: str = "expanding"
     skip_single_class_folds: bool = True

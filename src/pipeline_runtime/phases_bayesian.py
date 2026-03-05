@@ -70,6 +70,48 @@ def _extract_sampler_tail_metrics(idata: Any | None) -> dict[str, float | None]:
     }
 
 
+def _extract_chainwise_sampler_metrics(idata: Any | None) -> list[dict[str, Any]]:
+    if idata is None:
+        return []
+    sample_stats = getattr(idata, "sample_stats", None)
+    if sample_stats is None:
+        return []
+
+    def _get_array(keys: tuple[str, ...]) -> np.ndarray | None:
+        for key in keys:
+            if key in sample_stats:
+                try:
+                    return np.asarray(sample_stats[key].to_numpy(), dtype=float)
+                except Exception:
+                    return None
+        return None
+
+    accept_arr = _get_array(("acceptance_rate", "acceptance_probability"))
+    step_arr = _get_array(("step_size", "step_size_bar"))
+    energy_arr = _get_array(("energy",))
+    div_arr = _get_array(("diverging",))
+    tree_arr = _get_array(("tree_depth", "depth"))
+
+    reference = next((arr for arr in (accept_arr, step_arr, energy_arr, div_arr, tree_arr) if arr is not None), None)
+    if reference is None or reference.ndim < 2:
+        return []
+
+    n_chains = int(reference.shape[0])
+    chain_metrics: list[dict[str, Any]] = []
+    for chain_id in range(n_chains):
+        chain_metrics.append(
+            {
+                "chain": int(chain_id),
+                "accept_mean": None if accept_arr is None else float(np.nanmean(accept_arr[chain_id])),
+                "step_size_mean": None if step_arr is None else float(np.nanmean(step_arr[chain_id])),
+                "energy_mean": None if energy_arr is None else float(np.nanmean(energy_arr[chain_id])),
+                "divergences": None if div_arr is None else float(np.nansum(div_arr[chain_id])),
+                "max_tree_depth": None if tree_arr is None else float(np.nanmax(tree_arr[chain_id])),
+            }
+        )
+    return chain_metrics
+
+
 def _infer_climate_feature_columns(columns: list[str]) -> list[str]:
     selected: list[str] = []
     for column in columns:
@@ -269,6 +311,7 @@ def _log_bayesian_fit_completion(
 ) -> None:
     sampling_diag = dict(sampling_diagnostics or {})
     sampler_tail = _extract_sampler_tail_metrics(idata)
+    chain_metrics = _extract_chainwise_sampler_metrics(idata)
 
     fold_label = str(fold_number) if fold_number is not None else "na"
     mode_used = str(
@@ -320,6 +363,19 @@ def _log_bayesian_fit_completion(
             str(bayesian_settings.get("convergence_failure_mode", "strict")),
             sampling_diag.get("fallback_reason"),
             sampling_diag.get("sampling_backend_fallback_reason"),
+        )
+
+    for chain_metric in chain_metrics:
+        LOGGER.info(
+            "bayes_chain scope=%s fold=%s chain=%d div=%s tree=%s accept=%s step=%s energy=%s",
+            scope,
+            fold_label,
+            int(chain_metric.get("chain", -1)),
+            _fmt_log_metric(chain_metric.get("divergences"), digits=0),
+            _fmt_log_metric(chain_metric.get("max_tree_depth"), digits=0),
+            _fmt_log_metric(chain_metric.get("accept_mean"), digits=4),
+            _fmt_log_metric(chain_metric.get("step_size_mean"), digits=5),
+            _fmt_log_metric(chain_metric.get("energy_mean"), digits=3),
         )
 
 
@@ -1602,6 +1658,17 @@ def run_bayesian_phase(
         )
         safe_write_json_fn(bayesian_metrics, bayesian_metrics_path)
     state.artifacts["bayesian_metrics"] = bayesian_metrics_path
+
+    LOGGER.info(
+        "Bayesian phase summary | headline_eligible=%s converged=%s mode=%s oof_mode=%s oof_ess_first=%s oof_ess_last=%s oof_ess_improved=%s",
+        bool(bayesian_headline_eligible),
+        bayesian_converged,
+        str(bayesian_sampling_diagnostics.get("mode_used", "unknown")),
+        str(bayesian_sampling_diagnostics.get("oof_execution_mode_effective", "not_run")),
+        bayesian_sampling_diagnostics.get("oof_fold_ess_first"),
+        bayesian_sampling_diagnostics.get("oof_fold_ess_last"),
+        bayesian_sampling_diagnostics.get("oof_fold_ess_improved"),
+    )
 
     return BayesianPhaseResult(
         bayesian_score=bayesian_score,

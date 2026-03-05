@@ -52,7 +52,7 @@ from src.data_preprocessing.load_data import run as load_phase
 from src.data_preprocessing.merge_population import merge_population
 from src.decision_layer.cost_loss import AlertThresholds, assign_alert_levels, optimize_decision_threshold
 from src.evaluation.compare_tracks import build_comparison_table, export_track_comparison
-from src.evaluation.metrics_baselines import evaluate_baseline_predictions, lead_time_steps
+from src.evaluation.metrics_baselines import evaluate_baseline_predictions
 from src.evaluation.metrics_bayesian import evaluate_bayesian_predictions
 from src.feature_engineering.build_feature_matrix import build_feature_matrix
 from src.models.baselines.predict_baselines import predict_baselines
@@ -69,30 +69,7 @@ from src.pipeline_runtime.phase_context import SharedPhaseState
 from src.pipeline_runtime import phases_baseline as runtime_baseline
 from src.pipeline_runtime import phases_bayesian as runtime_bayesian
 from src.pipeline_runtime import phases_eval_decision as runtime_eval_decision
-from src.visualization.diagnostic_plots import (
-    plot_convergence_comparison,
-    plot_posterior_predictive_check,
-    plot_residuals,
-    plot_trace,
-)
-from src.visualization.exploratory import (
-    plot_case_distribution,
-    plot_missingness_summary,
-    plot_temporal_coverage_heatmap,
-)
-from src.visualization.feature_plots import plot_correlation_heatmap, plot_feature_importance
-from src.visualization.performance_plots import (
-    plot_calibration_curve,
-    plot_track_delta_heatmap,
-    plot_track_comparison_shared_metrics_bar,
-    plot_tracka_model_score_comparison,
-    plot_confusion_matrix_grid,
-    plot_brier_lead_time_summary,
-    plot_lead_time_boxplot,
-    plot_pr_curve,
-    plot_roc_curve,
-)
-from src.visualization.risk_maps import plot_decision_alert_trend, plot_risk_trajectory, plot_top_risk_districts
+from src.pipeline_runtime import phases_visualization as runtime_visualization
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1340,205 +1317,44 @@ def run(
         suppress_headline=bool(eval_decision_result.suppress_headline_comparison),
     )
 
+    _phase_start("visualization_payload")
+    bayesian_convergence_path = state.artifacts.get("bayesian_convergence")
+    payload_csv_path, payload_metadata_path = runtime_visualization.build_visualization_payload(
+        paths=paths,
+        run_id=run_id,
+        labeled_df=labeled_df,
+        features_df=features_df,
+        baseline_result=baseline_result,
+        bayesian_result=bayesian_result,
+        eval_decision_result=eval_decision_result,
+        bayesian_convergence_path=bayesian_convergence_path,
+        safe_write_json_fn=_safe_write_json,
+    )
+    state.artifacts["visualization_payload_csv"] = payload_csv_path
+    state.artifacts["visualization_payload_metadata"] = payload_metadata_path
+    _phase_end("visualization_payload", payload_rows=int(len(labeled_df)))
+
     _phase_start("visualizations", skip=bool(skip_visualizations))
     if not skip_visualizations:
-        _cleanup_legacy_figure_placeholders(paths.outputs_figures)
-        legacy_lead_time_plot = paths.outputs_figures / "performance_lead_time_boxplot.png"
-        if legacy_lead_time_plot.exists():
-            legacy_lead_time_plot.unlink()
-
-        viz_frame = labeled_df.copy()
-        viz_frame["risk_score"] = eval_decision_result.decision_frame["risk_score"]
-
-        if {"date", "district"}.issubset(viz_frame.columns):
-            try:
-                plot_temporal_coverage_heatmap(
-                    viz_frame,
-                    date_col="date",
-                    district_col="district",
-                    top_k_districts=20,
-                    output_dir=paths.outputs_figures,
-                )
-            except ValueError as exploratory_error:
-                LOGGER.warning("Temporal exploratory plot skipped: %s", exploratory_error)
-
-        if "cases" in viz_frame.columns:
-            try:
-                plot_case_distribution(viz_frame, case_col="cases", output_dir=paths.outputs_figures)
-            except ValueError as exploratory_error:
-                LOGGER.warning("Case distribution plot skipped: %s", exploratory_error)
-
-        plot_missingness_summary(viz_frame, output_dir=paths.outputs_figures)
-
-        numeric_feature_frame = features_df.select_dtypes(include=[np.number]).copy()
-        if not numeric_feature_frame.empty:
-            try:
-                plot_correlation_heatmap(numeric_feature_frame, output_dir=paths.outputs_figures)
-            except ValueError as feature_error:
-                LOGGER.warning("Feature correlation plot skipped: %s", feature_error)
-
-        feature_importances = _extract_feature_importances(baseline_result.baseline_models, feature_names=features_df.columns.tolist())
-        if feature_importances is not None:
-            try:
-                plot_feature_importance(feature_importances, top_k=20, output_dir=paths.outputs_figures)
-            except ValueError as feature_error:
-                LOGGER.warning("Feature importance plot skipped: %s", feature_error)
-
-        track_b_score = bayesian_result.bayesian_score if bayesian_result.bayesian_score is not None else eval_decision_result.decision_frame["risk_score"]
-        plot_residuals(
-            baseline_result.target,
-            track_b_score,
-            filename="trackb_residuals.png",
-            output_dir=paths.outputs_figures,
+        visualization_artifacts = runtime_visualization.run_visualization_phase(
+            paths=paths,
+            run_id=run_id,
+            labeled_df=labeled_df,
+            features_df=features_df,
+            baseline_result=baseline_result,
+            bayesian_result=bayesian_result,
+            eval_decision_result=eval_decision_result,
+            previous_bayesian_convergence=previous_bayesian_convergence,
+            lead_time_max_lookback_steps=lead_time_max_lookback_steps,
+            effective_seed=effective_seed,
+            bayesian_convergence_path=bayesian_convergence_path,
         )
-
-        track_b_array = pd.Series(track_b_score, copy=False).to_numpy(dtype=float)
-        if track_b_array.size == 0:
-            posterior_predictive_samples = np.zeros((1, 1), dtype=float)
-        else:
-            max_points = 10000
-            if track_b_array.size > max_points:
-                rng = np.random.default_rng(effective_seed)
-                sampled_idx = np.sort(rng.choice(track_b_array.size, size=max_points, replace=False))
-                track_b_array = track_b_array[sampled_idx]
-            sample_count = 25
-            posterior_predictive_samples = np.broadcast_to(track_b_array, (sample_count, track_b_array.size))
-        plot_posterior_predictive_check(
-            baseline_result.target,
-            posterior_predictive_samples,
-            filename="trackb_posterior_predictive_check.png",
-            output_dir=paths.outputs_figures,
-        )
-
-        if bayesian_result.bayesian_idata is not None:
-            plot_trace(
-                bayesian_result.bayesian_idata,
-                filename="trackb_trace_plot.png",
-                output_dir=paths.outputs_figures,
-            )
-
-        y_true = baseline_result.target.reset_index(drop=True)
-        y_score = pd.Series(track_b_score, copy=False).reset_index(drop=True)
-        if y_true.nunique(dropna=True) > 1 and len(y_true) > 1:
-            try:
-                plot_roc_curve(y_true, y_score, output_dir=paths.outputs_figures)
-                plot_pr_curve(y_true, y_score, output_dir=paths.outputs_figures)
-                plot_calibration_curve(
-                    y_true,
-                    y_score,
-                    filename="trackb_calibration_curve.png",
-                    output_dir=paths.outputs_figures,
-                )
-            except ValueError as metric_error:
-                LOGGER.warning("Performance plots skipped: %s", metric_error)
-
-            y_pred = (y_score >= 0.5).astype(int)
-            plot_confusion_matrix_grid(
-                y_true,
-                predictions={"decision": y_pred},
-                output_dir=paths.outputs_figures,
-            )
-
-            lead_times = lead_time_steps(
-                y_true,
-                y_pred,
-                max_lookback_steps=lead_time_max_lookback_steps,
-                temporal_index=baseline_result.temporal_index,
-                district=baseline_result.district_index,
-            )
-            trackb_lead_rows = pd.DataFrame(
-                {
-                    "track": ["Track B"] * max(len(lead_times), 1),
-                    "lead_time": lead_times.tolist() if not lead_times.empty else [0.0],
-                }
-            )
-            plot_lead_time_boxplot(
-                trackb_lead_rows,
-                filename="trackb_lead_time_boxplot.png",
-                output_dir=paths.outputs_figures,
-            )
-
-            brier_value = float(np.mean((y_true.astype(float).to_numpy() - y_score.astype(float).to_numpy()) ** 2))
-            lead_time_mean = float(lead_times.mean()) if not lead_times.empty else 0.0
-            plot_brier_lead_time_summary(
-                brier_score=brier_value,
-                lead_time_mean=lead_time_mean,
-                output_dir=paths.outputs_figures,
-            )
-
-        if eval_decision_result.comparison_table is not None:
-            try:
-                plot_track_delta_heatmap(eval_decision_result.comparison_table, output_dir=paths.outputs_figures)
-                plot_track_comparison_shared_metrics_bar(eval_decision_result.comparison_table, output_dir=paths.outputs_figures)
-            except ValueError as comparison_error:
-                LOGGER.warning("Track comparison plots skipped: %s", comparison_error)
-
-        if {"date", "alert_level"}.issubset(eval_decision_result.decision_frame.columns):
-            try:
-                plot_decision_alert_trend(
-                    eval_decision_result.decision_frame,
-                    date_col="date",
-                    alert_col="alert_level",
-                    output_dir=paths.outputs_figures,
-                )
-            except ValueError as alert_trend_error:
-                LOGGER.warning("Decision alert trend plot skipped: %s", alert_trend_error)
-
-        if baseline_result.baseline_model_metrics is not None and not baseline_result.baseline_model_metrics.empty:
-            try:
-                plot_tracka_model_score_comparison(
-                    baseline_result.baseline_model_metrics,
-                    filename="tracka_models_all_scores.png",
-                    output_dir=paths.outputs_figures,
-                )
-            except ValueError as tracka_error:
-                LOGGER.warning("Track A model score comparison plot skipped: %s", tracka_error)
-
-        if {"date", "district"}.issubset(labeled_df.columns):
-            risk_plot_frame = pd.DataFrame(
-                {
-                    "date": pd.to_datetime(labeled_df["date"], errors="coerce"),
-                    "district": labeled_df["district"],
-                    "risk_score": eval_decision_result.decision_frame["risk_score"],
-                    "cases": labeled_df.get("cases", pd.Series(0.0, index=labeled_df.index)),
-                }
-            )
-            risk_plot_frame = risk_plot_frame.dropna(subset=["date", "district", "risk_score"])
-            if not risk_plot_frame.empty:
-                plot_risk_trajectory(
-                    risk_plot_frame,
-                    date_col="date",
-                    risk_col="risk_score",
-                    district_col="district",
-                    top_n=10,
-                    filename="trackb_risk_trajectory.png",
-                    output_dir=paths.outputs_figures,
-                )
-                plot_top_risk_districts(
-                    risk_plot_frame,
-                    district_col="district",
-                    risk_col="risk_score",
-                    top_n=20,
-                    output_dir=paths.outputs_figures,
-                )
-
-        bayesian_convergence_path = state.artifacts.get("bayesian_convergence")
-        if bayesian_convergence_path is not None and Path(bayesian_convergence_path).exists():
-            try:
-                current_convergence = json.loads(Path(bayesian_convergence_path).read_text(encoding="utf-8"))
-                plot_convergence_comparison(
-                    current_diagnostics=current_convergence,
-                    previous_diagnostics=previous_bayesian_convergence,
-                    filename="bayesian_convergence_comparison.png",
-                    output_dir=paths.outputs_figures,
-                )
-                state.artifacts["bayesian_convergence_comparison"] = paths.outputs_figures / "bayesian_convergence_comparison.png"
-            except Exception as comparison_error:
-                LOGGER.warning("Unable to generate convergence comparison figure: %s", comparison_error)
-
-        _cleanup_legacy_figure_placeholders(paths.outputs_figures)
+        state.artifacts.update(visualization_artifacts)
     else:
-        LOGGER.info("Visualization phase skipped by flag")
+        LOGGER.info(
+            "Visualization phase skipped by flag; payload available for standalone run at %s",
+            payload_csv_path,
+        )
     _phase_end("visualizations")
 
     run_completed_at = datetime.now(timezone.utc).isoformat()
@@ -1625,6 +1441,8 @@ def main() -> None:
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+        stream=sys.stdout,
+        force=True,
     )
     run(
         model_config_path=args.model_config,

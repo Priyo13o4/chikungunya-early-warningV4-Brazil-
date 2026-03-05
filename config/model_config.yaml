@@ -25,7 +25,7 @@ bayesian_model:
   # Testing-phase defaults: keep these light; increase gradually for final thesis runs.
   draws: 600
   tune: 600
-  chains: 2
+  chains: 4
   bayesian_progress: false
   target_accept: 0.95
   max_treedepth: 12
@@ -56,7 +56,7 @@ bayesian_model_profiles:
     draws: 1000
     target_accept: 0.90
     max_treedepth: 12
-    bayesian_progress: true
+    bayesian_progress: false
   # Still moderate for fullfit while remaining testing-friendly.
   final:
     chains: 4
@@ -64,7 +64,7 @@ bayesian_model_profiles:
     draws: 1000
     target_accept: 0.90
     max_treedepth: 12
-    bayesian_progress: true
+    bayesian_progress: false
   # Minimal smoke/dev profile.
   dev:
     chains: 1

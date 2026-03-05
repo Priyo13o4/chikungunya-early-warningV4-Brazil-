@@ -1,10 +1,10 @@
 {
-  "run_id": "20260304T105923Z-c29c22c2",
-  "started_at_utc": "2026-03-04T10:59:23.251090+00:00",
+  "run_id": "20260305T082730Z-cbe2e90e",
+  "started_at_utc": "2026-03-05T08:27:30.370946+00:00",
   "effective_seed": 42,
   "model_config_path": "config/model_config.yaml",
-  "adapter_config_path": "projects/brazil_chik/config.yaml",
-  "cv_config_path": "config/cv_config.yaml",
+  "adapter_config_path": null,
+  "cv_config_path": "/private/var/folders/v9/bkg_tw413939xtywjlgb3x6w0000gn/T/pytest-of-priyodip/pytest-5/test_decision_alerts_schema_lo0/cv_config_smoke.yaml",
   "effective_cv_config": {
     "strategy": "time_series_split",
     "n_splits": 5,
@@ -15,51 +15,52 @@
     "first_valid_year": 2016,
     "last_valid_year": 2020,
     "start_train_year": 2015,
-    "thesis_strict": true,
-    "thesis_strict_mode": "rolling",
-    "train_window_years": 4,
+    "thesis_strict": false,
+    "train_window_years": 5,
     "skip_single_class_folds": true,
-    "minimum_evaluated_folds": 3,
+    "minimum_evaluated_folds": 1,
+    "fail_on_gate_violation": false,
+    "label_horizon_steps": 1,
+    "thesis_strict_mode": "expanding",
     "min_outbreak_count_per_fold": 1,
     "min_class_ratio_per_fold": 0.0,
     "max_class_ratio_per_fold": 1.0,
     "min_municipality_count_per_fold": 1,
-    "min_train_span_years": 1,
-    "fail_on_gate_violation": true
+    "min_train_span_years": 1
   },
   "adapter": {
-    "enabled": true,
+    "enabled": false,
     "callables": {
-      "load_data": "src.data_preprocessing.load_data:run",
-      "label_outbreaks": "projects.brazil_chik.label_adapter:label_outbreaks",
-      "build_feature_matrix": "projects.brazil_chik.feature_adapter:build_feature_matrix",
-      "build_fold_ledger": "projects.brazil_chik.cv_adapter:build_fold_ledger",
-      "generate_time_splits": "projects.brazil_chik.cv_adapter:generate_time_splits"
+      "load_data": "default",
+      "label_outbreaks": "default",
+      "build_feature_matrix": "default",
+      "build_fold_ledger": "default",
+      "generate_time_splits": "default"
     },
-    "brazil_adapter_active": true
+    "brazil_adapter_active": false
   },
   "bayesian_mode_control": {
     "force_full_requested": false,
     "force_full_effective": false,
-    "brazil_adapter_active": true,
+    "brazil_adapter_active": false,
     "bayesian_simplified_mode": false,
-    "max_convergence_retries": 0,
+    "max_convergence_retries": 1,
     "convergence_failure_mode": "warn"
   },
   "bayesian_backend": {
     "requested_backend": "auto",
-    "resolved_backend": "nvidia_cuda",
+    "resolved_backend": "macos_metal",
     "actual_runtime_backend": "cpu",
-    "backend_implemented": false,
-    "fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
+    "backend_implemented": true,
+    "fallback_reason": null,
     "sampling_backend_requested": "auto",
     "sampling_backend_effective": "pymc",
-    "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
+    "sampling_backend_fallback_reason": null,
     "sampling_backend_requested_source": "bayesian_model"
   },
   "sampling_backend_requested": "auto",
   "sampling_backend_effective": "pymc",
-  "sampling_backend_fallback_reason": "Bayesian implementation does not currently support 'nvidia_cuda' execution; using CPU runtime path",
+  "sampling_backend_fallback_reason": null,
   "bayesian_profile_usage": {
     "profile_mode_override": null,
     "default_routing": "fullfit=final,oof=cv",
@@ -72,7 +73,7 @@
         "draws": 1000,
         "target_accept": 0.9,
         "max_treedepth": 12,
-        "bayesian_progress": true
+        "bayesian_progress": false
       },
       "final": {
         "chains": 4,
@@ -80,7 +81,7 @@
         "draws": 1000,
         "target_accept": 0.9,
         "max_treedepth": 12,
-        "bayesian_progress": true
+        "bayesian_progress": false
       },
       "dev": {
         "chains": 1,
@@ -98,7 +99,7 @@
         "draws": 1000,
         "target_accept": 0.9,
         "max_treedepth": 12,
-        "bayesian_progress": true
+        "bayesian_progress": false
       },
       "oof": {
         "chains": 4,
@@ -106,7 +107,7 @@
         "draws": 1000,
         "target_accept": 0.9,
         "max_treedepth": 12,
-        "bayesian_progress": true
+        "bayesian_progress": false
       }
     },
     "cv_profile_differs_from_final": false,
@@ -123,30 +124,31 @@
       "configured": true
     },
     "effective": {
-      "baseline_backend": "nvidia_cuda",
-      "bayesian_backend": "nvidia_cuda"
+      "baseline_backend": "macos_metal",
+      "bayesian_backend": "macos_metal"
     },
-    "baseline_backend": "nvidia_cuda",
-    "bayesian_backend": "nvidia_cuda",
+    "baseline_backend": "macos_metal",
+    "bayesian_backend": "macos_metal",
     "fallback": "cpu",
     "fallback_used": false,
     "reason_logs": [],
     "capabilities": {
-      "macos_metal": false,
-      "nvidia_cuda": true,
+      "macos_metal": true,
+      "nvidia_cuda": false,
       "details": {
-        "platform": "Linux",
+        "platform": "Darwin",
         "macos_metal": {
-          "reason": "non_macos"
-        },
-        "nvidia_cuda": {
+          "platform": "Darwin",
           "probes": [
             {
-              "source": "nvidia-smi -L",
+              "source": "xcrun -f metal",
               "returncode": 0,
-              "stdout": "GPU 0: NVIDIA L4 (UUID: GPU-7d16641b-1c48-804c-9ad1-8534d1caff9c)"
+              "stdout": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"
             }
           ]
+        },
+        "nvidia_cuda": {
+          "probes": []
         }
       }
     },
@@ -155,7 +157,7 @@
         "track": "baseline",
         "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "nvidia_cuda",
+        "effective_backend": "macos_metal",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
@@ -164,7 +166,7 @@
         "track": "bayesian",
         "requested_mode": "auto",
         "gpu_preferred_for_track": true,
-        "effective_backend": "nvidia_cuda",
+        "effective_backend": "macos_metal",
         "fallback_backend": "cpu",
         "fallback_used": false,
         "reason_logs": []
@@ -182,63 +184,101 @@
       "strategy": "recent_years"
     },
     "active": false,
-    "rows_before": 84378,
-    "rows_after": 84378
+    "rows_before": 8,
+    "rows_after": 8
   },
   "curated_municipalities": {
-    "path": "resources/curated_municipalities_v1.json",
-    "version": "v1",
-    "source": "outputs/reports/audit_suite/municipality_candidates_balanced_top300.csv",
-    "count": 300,
-    "sha256": "a8140067558922bae3e96e3b5e56bce27d16ce0352dfdf1d35e58f11f45952be",
+    "path": "/private/var/folders/v9/bkg_tw413939xtywjlgb3x6w0000gn/T/pytest-of-priyodip/pytest-5/test_decision_alerts_schema_lo0/curated_municipalities_test.json",
+    "version": "v1-smoke-tests",
+    "source": "tests/test_pipeline_smoke.py",
+    "count": 4,
+    "sha256": "d5836789096a70367838268d2661af7387fdb5828c360fb8a3f37d74065d5316",
     "filter_report": {
-      "municipality_column": "municipality_id",
-      "rows_before": 172200,
-      "rows_after": 84378,
-      "districts_before": 300,
-      "districts_after": 147
+      "municipality_column": "district",
+      "rows_before": 8,
+      "rows_after": 8,
+      "districts_before": 2,
+      "districts_after": 2
     }
   },
   "reproducibility": {
     "effective_cli_args": {
       "model_config": "config/model_config.yaml",
-      "adapter_config": "projects/brazil_chik/config.yaml",
-      "cv_config": "config/cv_config.yaml",
-      "raw_data": "data/processed/brazil_chik_dataset_top300_final.csv",
+      "adapter_config": null,
+      "cv_config": "/private/var/folders/v9/bkg_tw413939xtywjlgb3x6w0000gn/T/pytest-of-priyodip/pytest-5/test_decision_alerts_schema_lo0/cv_config_smoke.yaml",
+      "raw_data": "/private/var/folders/v9/bkg_tw413939xtywjlgb3x6w0000gn/T/pytest-of-priyodip/pytest-5/test_decision_alerts_schema_lo0/synthetic_schema_raw.csv",
       "population_data": null,
-      "start_year": 2015,
-      "end_year": 2025,
+      "start_year": 2016,
+      "end_year": 2016,
       "selected_percentile": 75,
-      "skip_baselines": false,
-      "skip_bayesian": false,
-      "skip_visualizations": false,
+      "skip_baselines": true,
+      "skip_bayesian": true,
+      "skip_visualizations": true,
       "decision_cost": 0.2,
       "decision_loss": 1.0,
       "lead_time_max_lookback_steps": 8,
       "strict_bayesian_deps": false,
       "strict_feature_gate": false,
-      "bayesian_draws": null,
-      "bayesian_tune": null,
-      "bayesian_chains": null,
-      "bayesian_target_accept": null,
-      "bayesian_max_treedepth": null,
-      "bayesian_profile_mode": null,
-      "bayesian_progress": true,
-      "bayesian_simplified_mode": false,
       "force_full_bayesian": false,
+      "bayesian_overrides": null,
+      "bayesian_profile_mode": null,
       "export_detailed_csv": false,
-      "model_names": null,
-      "log_level": "INFO",
+      "model_names": [
+        "rule_based_threshold",
+        "poisson_regression",
+        "random_forest",
+        "xgboost"
+      ],
       "seed": null
     },
-    "git_commit_sha": "db0f6375a48c231c3c094fa5f4e5da04fd70c1e3",
-    "python_version": "3.10.17 | packaged by conda-forge | (main, Apr 10 2025, 22:19:12) [GCC 13.3.0]",
+    "git_commit_sha": "fd21c179ebf957d1681d949350c89f223f91fb79",
+    "python_version": "3.10.19 (main, Oct  9 2025, 15:25:03) [Clang 17.0.0 (clang-1700.6.3.2)]",
     "input_hashes_sha256": {
-      "raw_data": "ba9c822d223e818e46680deab043da86dddefdd5373c5bb68eb358f3345b46ac",
-      "model_config": "4e559b8ab623aa8841ee95f8cbb413e8130854f4bb3bf231f82fe367c5caf97f",
-      "adapter_config": "d5c2dac0d9215104197f93e2413bda0fc243a6c8a76efa0078b0b90035fa2bce",
-      "cv_config": "6f0e19cf9d7a3de0e3560a4041b571d7064a44ba801460b96ff90f2f54507efc",
-      "curated_municipalities_contract": "a8140067558922bae3e96e3b5e56bce27d16ce0352dfdf1d35e58f11f45952be"
+      "raw_data": "19569fcb1f110962e04a24878bf0ffcaf8a5130c4e55ea9bb15628f5fbe4292a",
+      "model_config": "3bf4f3d356afc1482d3f86634fb7be23073bdfa5d0bef48b0599b03126845d73",
+      "adapter_config": null,
+      "cv_config": "d970c532fd01e442b71adc180ddaf4850915fdf7eb2802e3b41934110ea93740",
+      "curated_municipalities_contract": "d5836789096a70367838268d2661af7387fdb5828c360fb8a3f37d74065d5316"
     }
+  },
+  "bayesian_covariates_effective": [
+    "month_sin",
+    "month_cos",
+    "rainfall",
+    "temperature",
+    "humidity"
+  ],
+  "bayesian_covariates_requested": [
+    "month_sin",
+    "month_cos",
+    "rainfall",
+    "temperature",
+    "humidity"
+  ],
+  "bayesian_covariate_selection": {
+    "requested_covariates": [
+      "month_sin",
+      "month_cos",
+      "rainfall",
+      "temperature",
+      "humidity"
+    ],
+    "selected_covariates": [
+      "month_sin",
+      "month_cos",
+      "rainfall",
+      "temperature",
+      "humidity"
+    ],
+    "excluded_covariates": [],
+    "missing_covariates": [],
+    "required_covariates": [
+      "month",
+      "year",
+      "weekofyear"
+    ],
+    "required_covariates_present": true,
+    "viable_count": 5,
+    "requested_count": 5
   }
 }

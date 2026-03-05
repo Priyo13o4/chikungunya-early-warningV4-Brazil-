@@ -68,13 +68,14 @@ secrets/
 /data/external/
 /data/features/
 
-# Ignore only very large model artifacts (keep smaller model files tracked)
-# Large trained model pickles created by baseline runs
-outputs/models/baselines/*/random_forest.pkl
-outputs/models/baselines/final/random_forest.pkl
-
-# Saved models and training artifacts (specific large files only)
-# (previously a broad /models/ ignore — removed to allow tracking small files)
+# Keep outputs broadly trackable; ignore only heavy model binaries.
+outputs/models/**/*.pkl
+outputs/models/**/*.joblib
+outputs/models/**/*.onnx
+outputs/models/**/*.pt
+outputs/models/**/*.pth
+outputs/models/**/*.h5
+outputs/models/**/*.npz
 
 # Compiled extensions
 *.so

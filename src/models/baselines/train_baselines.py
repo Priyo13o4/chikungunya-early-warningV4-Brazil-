@@ -14,7 +14,6 @@ import pandas as pd
 
 from config.paths import ensure_directories
 from src.models.baselines.baseline_models import BaselineModel, get_baseline_model
-from src.models.baselines.calibrate_baselines import brier_score
 from src.models.baselines.cv_splitter import TimeSeriesCVConfig, build_fold_ledger, generate_time_splits
 from src.models.baselines.model_registry import list_default_model_names, validate_model_names
 
@@ -162,6 +161,33 @@ def _build_future_case_series(
     return pd.to_numeric(restored, errors="coerce")
 
 
+def _build_forward_horizon_position_series(
+    *,
+    district_series: pd.Series,
+    temporal_series: pd.Series | None,
+    horizon_steps: int,
+) -> pd.Series:
+    steps = max(1, int(horizon_steps))
+    working = pd.DataFrame(
+        {
+            "district": district_series,
+            "row_position": np.arange(len(district_series), dtype=int),
+        },
+        index=district_series.index,
+    )
+    if temporal_series is not None:
+        working["date"] = pd.to_datetime(temporal_series, errors="coerce")
+    else:
+        working["date"] = pd.NaT
+
+    working["_order"] = np.arange(len(working), dtype=int)
+    working = working.sort_values(["district", "date", "_order"], na_position="last")
+    working["forward_position"] = working.groupby("district", dropna=False)["row_position"].shift(-steps)
+    restored = working.sort_values("_order")["forward_position"]
+    restored.index = district_series.index
+    return pd.to_numeric(restored, errors="coerce")
+
+
 def _derive_fold_targets_from_train_threshold(
     *,
     case_series: pd.Series,
@@ -228,6 +254,11 @@ def train_baselines(
 
     output_root = _ensure_output_dir(output_dir, config=config)
     cv_cfg = cv_config or TimeSeriesCVConfig(date_column=config.date_column)
+    if not bool(fold_local_climate_imputation):
+        LOGGER.warning(
+            "fold_local_climate_imputation_disabled_ignored | strict fold-local climate imputation remains enforced for baseline CV"
+        )
+    fold_local_climate_imputation = True
 
     training_frame = X.copy()
     training_frame[cv_cfg.target_column] = pd.to_numeric(y, errors="coerce").fillna(0.0)
@@ -258,6 +289,7 @@ def train_baselines(
         else None
     )
     fold_future_cases: pd.Series | None = None
+    fold_forward_positions: pd.Series | None = None
     if (
         fold_local_labeling
         and case_ref is not None
@@ -267,6 +299,11 @@ def train_baselines(
             case_series=case_ref,
             district_series=district_ref,
             temporal_series=temporal_ref,
+        )
+        fold_forward_positions = _build_forward_horizon_position_series(
+            district_series=district_ref,
+            temporal_series=temporal_ref,
+            horizon_steps=int(getattr(cv_cfg, "label_horizon_steps", 1)),
         )
 
     if config.enable_temporal_cv:
@@ -294,6 +331,23 @@ def train_baselines(
 
             train_positions = np.asarray(train_idx, dtype=int)
             valid_positions = np.asarray(valid_idx, dtype=int)
+
+            purged_train_rows = 0
+            if fold_future_cases is not None and fold_forward_positions is not None and train_positions.size and valid_positions.size:
+                valid_position_set = set(int(value) for value in valid_positions.tolist())
+                forward_for_train = pd.to_numeric(fold_forward_positions.iloc[train_positions], errors="coerce")
+                purge_mask = forward_for_train.isin(valid_position_set).to_numpy(dtype=bool)
+                purged_train_rows = int(purge_mask.sum())
+                if purged_train_rows > 0:
+                    train_positions = train_positions[~purge_mask]
+            LOGGER.info(
+                "Baseline CV fold %d/%d purge guard | horizon_steps=%d, purged_train_rows=%d, rows_train_after_purge=%d",
+                int(fold_id),
+                int(total_yielded_folds),
+                int(max(1, int(getattr(cv_cfg, "label_horizon_steps", 1)))),
+                int(purged_train_rows),
+                int(len(train_positions)),
+            )
 
             X_train = X.iloc[train_positions]
             X_valid = X.iloc[valid_positions]
@@ -345,10 +399,10 @@ def train_baselines(
                     {
                         "fold": fold_id,
                         "model": model_name,
-                        "rows_train": int(len(train_idx)),
+                        "rows_train": int(len(train_positions)),
                         "rows_valid": int(len(valid_idx)),
                         "accuracy": _accuracy(y_valid, y_prob),
-                        "brier": brier_score(y_valid, y_prob),
+                        "brier": float("nan"),
                         "positive_rate": float(pd.to_numeric(y_prob, errors="coerce").fillna(0.0).mean()),
                     }
                 )

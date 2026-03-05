@@ -1,0 +1,48 @@
+{
+  "run_id": "20260305T082730Z-cbe2e90e",
+  "degraded": false,
+  "suppress_headline_comparison": false,
+  "reasons": [],
+  "baseline_headline_eligible": false,
+  "bayesian_headline_eligible": false,
+  "bayesian_covariates_requested": [
+    "month_sin",
+    "month_cos",
+    "rainfall",
+    "temperature",
+    "humidity"
+  ],
+  "bayesian_covariates_effective": [
+    "month_sin",
+    "month_cos",
+    "rainfall",
+    "temperature",
+    "humidity"
+  ],
+  "bayesian_covariate_selection": {
+    "requested_covariates": [
+      "month_sin",
+      "month_cos",
+      "rainfall",
+      "temperature",
+      "humidity"
+    ],
+    "selected_covariates": [
+      "month_sin",
+      "month_cos",
+      "rainfall",
+      "temperature",
+      "humidity"
+    ],
+    "excluded_covariates": [],
+    "missing_covariates": [],
+    "required_covariates": [
+      "month",
+      "year",
+      "weekofyear"
+    ],
+    "required_covariates_present": true,
+    "viable_count": 5,
+    "requested_count": 5
+  }
+}

@@ -554,6 +554,14 @@ def run_baseline_phase(
     )
     state.artifacts["baseline_backend_metadata"] = baseline_backend_metadata_path
 
+    LOGGER.info(
+        "Baseline phase summary | skip=%s headline_eligible=%s evaluated_folds=%d models_trained=%d",
+        bool(skip_baselines),
+        bool(baseline_headline_eligible),
+        int(baseline_evaluated_fold_count),
+        int(len(baseline_models)),
+    )
+
     return BaselinePhaseResult(
         model_input_df=model_input_df,
         target=target,
