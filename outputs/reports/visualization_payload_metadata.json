@@ -1,42 +1,387 @@
 {
-  "run_id": "20260305T082730Z-cbe2e90e",
-  "created_at_utc": "2026-03-05T08:27:30.486775+00:00",
-  "row_count": 8,
+  "run_id": "20260305T083716Z-c2100624",
+  "created_at_utc": "2026-03-06T01:39:12.704538+00:00",
+  "row_count": 84378,
   "feature_column_map": {
-    "feature__cases": "cases",
+    "feature__municipality_id": "municipality_id",
+    "feature__rt": "rt",
+    "feature__p_rt1": "p_rt1",
+    "feature__receptivo": "receptivo",
+    "feature__epiweek": "epiweek",
+    "feature__municipality_id_num": "municipality_id_num",
+    "feature__geocodigo": "geocodigo",
+    "feature__temp_min_avg": "temp_min_avg",
+    "feature__temp_med_avg": "temp_med_avg",
+    "feature__temp_max_avg": "temp_max_avg",
+    "feature__temp_amplit_avg": "temp_amplit_avg",
+    "feature__precip_tot_sum": "precip_tot_sum",
+    "feature__umid_min_avg": "umid_min_avg",
+    "feature__umid_med_avg": "umid_med_avg",
+    "feature__umid_max_avg": "umid_max_avg",
+    "feature__source_year": "source_year",
+    "feature__month": "month",
     "feature__rainfall": "rainfall",
     "feature__temperature": "temperature",
     "feature__humidity": "humidity",
-    "feature__temp_kelvin": "temp_kelvin",
-    "feature__month": "month",
-    "feature__threshold_p70": "threshold_p70",
-    "feature__threshold_p75": "threshold_p75",
-    "feature__threshold_p80": "threshold_p80",
-    "feature__outbreak_label_p70": "outbreak_label_p70",
-    "feature__outbreak_label_p75": "outbreak_label_p75",
-    "feature__outbreak_label_p80": "outbreak_label_p80",
-    "feature__outbreak_label": "outbreak_label",
-    "feature__year": "year",
-    "feature__weekofyear": "weekofyear",
-    "feature__case_rolling_mean": "case_rolling_mean",
-    "feature__case_rolling_std": "case_rolling_std",
-    "feature__case_velocity": "case_velocity",
-    "feature__case_acceleration": "case_acceleration",
     "feature__case_lag_1": "case_lag_1",
     "feature__case_lag_2": "case_lag_2",
-    "feature__district_code": "district_code",
-    "feature__temp_celsius": "temp_celsius",
-    "feature__degree_days_20": "degree_days_20",
-    "feature__temp_optimal": "temp_optimal",
-    "feature__temp_anomaly": "temp_anomaly",
-    "feature__rainfall_4wk": "rainfall_4wk",
-    "feature__temp_rain_interaction": "temp_rain_interaction"
+    "feature__case_lag_3": "case_lag_3",
+    "feature__case_lag_4": "case_lag_4",
+    "feature__case_roll4_mean": "case_roll4_mean",
+    "feature__case_roll4_var": "case_roll4_var",
+    "feature__case_roll4_max": "case_roll4_max",
+    "feature__case_roll4_cv": "case_roll4_cv",
+    "feature__case_trend_1w": "case_trend_1w",
+    "feature__case_trend_4w": "case_trend_4w",
+    "feature__case_cum12": "case_cum12",
+    "feature__rt_lag_1": "rt_lag_1",
+    "feature__p_rt1_lag_1": "p_rt1_lag_1",
+    "feature__receptivo_lag_1": "receptivo_lag_1",
+    "feature__year": "year",
+    "feature__weekofyear": "weekofyear",
+    "feature__month_sin": "month_sin",
+    "feature__month_cos": "month_cos"
   },
   "feature_importances": {},
-  "baseline_model_metrics_records": [],
-  "comparison_table_records": [],
-  "bayesian_convergence_path": null,
-  "bayesian_convergence": null,
-  "covariate_hdi_records": [],
-  "payload_csv_path": "/Volumes/My Drive/Priyodip/college notes and stuff/sem6/research work/implemnetation/chikungunya-early-warningV4/outputs/reports/visualization_payload.csv"
+  "baseline_model_metrics_records": [
+    {
+      "model": "rule_based_threshold",
+      "accuracy": 0.7592032028122254,
+      "precision": 0.5426138467234357,
+      "recall": 0.8571762779272429,
+      "f1": 0.664550648408452,
+      "kappa": 0.4911330574190256,
+      "false_alarm_rate": 0.2785694958058988,
+      "roc_auc": 0.789303391060672,
+      "pr_auc": 0.5048579301607217,
+      "lead_time_mean": 1.4792758456407813,
+      "lead_time_utility": 1.3644592663172939
+    },
+    {
+      "model": "poisson_regression",
+      "accuracy": 0.7768772580802656,
+      "precision": 0.8650862068965517,
+      "recall": 0.2347642999181191,
+      "f1": 0.3693072039746067,
+      "kappa": 0.2842876995354535,
+      "false_alarm_rate": 0.014115630919094435,
+      "roc_auc": 0.8345063279069002,
+      "pr_auc": 0.6923940234819153,
+      "lead_time_mean": 0.51738923296808,
+      "lead_time_utility": 0.39352072415435924
+    },
+    {
+      "model": "random_forest",
+      "accuracy": 0.797220323536113,
+      "precision": 0.7877885331347729,
+      "recall": 0.3712714937419581,
+      "f1": 0.5046907298457625,
+      "kappa": 0.3972392703531392,
+      "false_alarm_rate": 0.038558672318932084,
+      "roc_auc": 0.8246347598033199,
+      "pr_auc": 0.6910821880540239,
+      "lead_time_mean": 0.7927584564078133,
+      "lead_time_utility": 0.5945688423058599
+    },
+    {
+      "model": "xgboost",
+      "accuracy": 0.8117371350454057,
+      "precision": 0.7435265104808878,
+      "recall": 0.49374195812375715,
+      "f1": 0.5934204976803037,
+      "kappa": 0.4773476328762444,
+      "false_alarm_rate": 0.06566248759808785,
+      "roc_auc": 0.8465226530693138,
+      "pr_auc": 0.7240536080437232,
+      "lead_time_mean": 1.1519771319676035,
+      "lead_time_utility": 0.9070986183897094
+    }
+  ],
+  "comparison_table_records": [
+    {
+      "metric": "accuracy",
+      "baseline": 0.27826058653126323,
+      "bayesian": 0.6748689906584644,
+      "delta": 0.39660840412720116,
+      "relative_delta_pct": 142.5312902093812
+    },
+    {
+      "metric": "balanced_threshold_accuracy",
+      "baseline": null,
+      "bayesian": 0.3897731341340364,
+      "delta": null,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "balanced_threshold_f1",
+      "baseline": null,
+      "bayesian": 0.43591286556745695,
+      "delta": null,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "balanced_threshold_kappa",
+      "baseline": null,
+      "bayesian": 0.03842414646126335,
+      "delta": null,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "balanced_threshold_optimized",
+      "baseline": null,
+      "bayesian": 1.0,
+      "delta": null,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "balanced_threshold_precision",
+      "baseline": null,
+      "bayesian": 0.2934337910641228,
+      "delta": null,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "balanced_threshold_recall",
+      "baseline": null,
+      "bayesian": 0.847350567317815,
+      "delta": null,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "balanced_threshold_sample_size",
+      "baseline": null,
+      "bayesian": 30723.0,
+      "delta": null,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "balanced_threshold_used",
+      "baseline": null,
+      "bayesian": 0.16,
+      "delta": null,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "brier",
+      "baseline": null,
+      "bayesian": 0.21474223340971174,
+      "delta": null,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "f1",
+      "baseline": 0.4353738032185781,
+      "bayesian": 0.4353738032185781,
+      "delta": 0.0,
+      "relative_delta_pct": 0.0
+    },
+    {
+      "metric": "false_alarm_rate",
+      "baseline": 1.0,
+      "bayesian": 0.12988184360061333,
+      "delta": -0.8701181563993867,
+      "relative_delta_pct": -87.01181563993867
+    },
+    {
+      "metric": "kappa",
+      "baseline": 0.0,
+      "bayesian": 0.0,
+      "delta": 0.0,
+      "relative_delta_pct": null
+    },
+    {
+      "metric": "lead_time_mean",
+      "baseline": 0.9790376369699857,
+      "bayesian": 0.39923773225345405,
+      "delta": -0.5797999047165316,
+      "relative_delta_pct": -59.22141119221411
+    },
+    {
+      "metric": "lead_time_utility",
+      "baseline": 0.9790376369699857,
+      "bayesian": 0.33158646974749884,
+      "delta": -0.6474511672224869,
+      "relative_delta_pct": -66.13138686131387
+    },
+    {
+      "metric": "pr_auc",
+      "baseline": 0.793761273169385,
+      "bayesian": 0.32095144013525945,
+      "delta": -0.4728098330341256,
+      "relative_delta_pct": -59.56574716051058
+    },
+    {
+      "metric": "precision",
+      "baseline": 0.27826058653126323,
+      "bayesian": 0.27826058653126323,
+      "delta": 0.0,
+      "relative_delta_pct": 0.0
+    },
+    {
+      "metric": "recall",
+      "baseline": 1.0,
+      "bayesian": 1.0,
+      "delta": 0.0,
+      "relative_delta_pct": 0.0
+    },
+    {
+      "metric": "roc_auc",
+      "baseline": 0.8902388005928885,
+      "bayesian": 0.5625945405284292,
+      "delta": -0.32764426006445935,
+      "relative_delta_pct": -36.80408670642665
+    },
+    {
+      "metric": "threshold_used",
+      "baseline": null,
+      "bayesian": 0.0,
+      "delta": null,
+      "relative_delta_pct": null
+    }
+  ],
+  "bayesian_convergence_path": "/home/priyodip/chikungunya-early-warningV4-Brazil-/outputs/models/bayesian/diagnostics/convergence.json",
+  "bayesian_convergence": {
+    "converged": false,
+    "divergence_threshold": 25.0,
+    "max_tree_depth_threshold": 12.0,
+    "rhat_threshold": 1.05,
+    "ess_threshold": 200.0,
+    "divergences": 0.0,
+    "max_tree_depth": 10.0,
+    "r_hat_max": 1.0152074973046845,
+    "ess_min": 171.074577061912,
+    "n_parameters": 27856.0,
+    "simplified_mode": false,
+    "mode_used": "full_latent_ar",
+    "force_full_bayesian": false,
+    "fallback_used": false,
+    "degraded_mode": false,
+    "threshold_basis": "provided_series",
+    "threshold_column": null,
+    "threshold_default": 1.0,
+    "configured_draws": 1000,
+    "configured_tune": 1000,
+    "configured_chains": 4,
+    "configured_bayesian_progress": true,
+    "configured_target_accept": 0.9,
+    "configured_max_treedepth": 12,
+    "convergence_failure_mode": "warn",
+    "convergence_failure_mode_explicit": true,
+    "convergence_failure_mode_auto_reason": null,
+    "requested_backend": "auto",
+    "resolved_backend": "nvidia_cuda",
+    "actual_runtime_backend": "cuda",
+    "backend_implemented": true,
+    "fallback_reason": null,
+    "sampling_backend_requested": "auto",
+    "sampling_backend_effective": "jax_numpyro",
+    "sampling_backend_fallback_reason": null,
+    "compute_backend_requested": "auto",
+    "compute_backend_effective": "nvidia_cuda",
+    "compute_backend_runtime": "cuda",
+    "compute_backend_fallback_used": false,
+    "compute_backend_fallback_reason": null,
+    "grouped_diagnostics": [
+      {
+        "group": "random_effects",
+        "n_parameters": 296,
+        "r_hat_max": 1.0152074973046845,
+        "r_hat_p95": 1.0111725246633423,
+        "ess_min": 171.074577061912,
+        "ess_p05": 205.3134513123453,
+        "ess_median": 473.36094907499097,
+        "fail_rhat_count": 0,
+        "fail_ess_count": 15,
+        "rhat_threshold": 1.05,
+        "ess_threshold": 200.0
+      },
+      {
+        "group": "fixed_effects",
+        "n_parameters": 5,
+        "r_hat_max": 1.0032306197720842,
+        "r_hat_p95": 1.002761175318741,
+        "ess_min": 3037.56971837706,
+        "ess_p05": 3043.478211565994,
+        "ess_median": 3213.6857341023237,
+        "fail_rhat_count": 0,
+        "fail_ess_count": 0,
+        "rhat_threshold": 1.05,
+        "ess_threshold": 200.0
+      },
+      {
+        "group": "temporal_state",
+        "n_parameters": 13778,
+        "r_hat_max": 1.0101987840457252,
+        "r_hat_p95": 1.006452656730814,
+        "ess_min": 376.85151250186965,
+        "ess_p05": 469.25420034577246,
+        "ess_median": 2208.0408448481908,
+        "fail_rhat_count": 0,
+        "fail_ess_count": 0,
+        "rhat_threshold": 1.05,
+        "ess_threshold": 200.0
+      },
+      {
+        "group": "likelihood",
+        "n_parameters": 1,
+        "r_hat_max": 1.0005710711262763,
+        "r_hat_p95": 1.0005710711262763,
+        "ess_min": 7381.103496337282,
+        "ess_p05": 7381.103496337282,
+        "ess_median": 7381.103496337282,
+        "fail_rhat_count": 0,
+        "fail_ess_count": 0,
+        "rhat_threshold": 1.05,
+        "ess_threshold": 200.0
+      },
+      {
+        "group": "other",
+        "n_parameters": 13776,
+        "r_hat_max": 1.0086138022424156,
+        "r_hat_p95": 1.0032053718783496,
+        "ess_min": 560.4430897066989,
+        "ess_p05": 4666.999528762603,
+        "ess_median": 5611.477025286013,
+        "fail_rhat_count": 0,
+        "fail_ess_count": 0,
+        "rhat_threshold": 1.05,
+        "ess_threshold": 200.0
+      }
+    ],
+    "strict_converged": true,
+    "strict_policy": "group_aware_v1",
+    "hard_fail_global": false,
+    "strict_fail_reasons": [],
+    "core_ess_fail_groups": [
+      "random_effects"
+    ],
+    "core_rhat_fail_groups": [],
+    "temporal_fail_fraction": 0.0,
+    "temporal_fail_fraction_threshold": 0.2,
+    "temporal_rhat_fail_fraction": 0.0,
+    "temporal_rhat_fail_fraction_threshold": 0.2,
+    "other_fail_fraction": 0.0,
+    "other_rhat_fail_fraction": 0.0
+  },
+  "covariate_hdi_records": [
+    {
+      "covariate": "temperature",
+      "mean": 0.04821587195943087,
+      "hdi_low": 0.013451258809764766,
+      "hdi_high": 0.0831791378922498
+    },
+    {
+      "covariate": "rainfall",
+      "mean": -0.036407118540889544,
+      "hdi_low": -0.060040321090840364,
+      "hdi_high": -0.013194989248942945
+    },
+    {
+      "covariate": "humidity",
+      "mean": 0.18274058946340108,
+      "hdi_low": 0.14707262581162758,
+      "hdi_high": 0.21885784484898918
+    }
+  ],
+  "payload_csv_path": "/home/priyodip/chikungunya-early-warningV4-Brazil-/outputs/reports/visualization_payload.csv"
 }

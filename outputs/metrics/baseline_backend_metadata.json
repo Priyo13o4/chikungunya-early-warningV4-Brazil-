@@ -1,12 +1,12 @@
 {
-  "run_id": "20260305T082730Z-cbe2e90e",
-  "compute_backend_effective": "macos_metal",
-  "skip_baselines": true,
+  "run_id": "20260305T083716Z-c2100624",
+  "compute_backend_effective": "nvidia_cuda",
+  "skip_baselines": false,
   "model_names": [
     "rule_based_threshold",
     "poisson_regression",
     "random_forest",
     "xgboost"
   ],
-  "training_config_path": null
+  "training_config_path": "/home/priyodip/chikungunya-early-warningV4-Brazil-/outputs/models/baselines/training_config.json"
 }

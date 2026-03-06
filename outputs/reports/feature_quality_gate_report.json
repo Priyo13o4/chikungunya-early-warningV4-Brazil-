@@ -1,67 +1,22 @@
 {
   "passed": true,
   "strict_mode": false,
+  "flagged_features": [],
+  "dropped_features": [
+    "cases",
+    "outbreak_label",
+    "outbreak_label_p70",
+    "outbreak_label_p75",
+    "outbreak_label_p80",
+    "threshold_p70",
+    "threshold_p75",
+    "threshold_p80"
+  ],
   "variance_threshold": 1e-10,
   "uniqueness_threshold": 0.01,
   "min_non_missing_samples": 24,
-  "mechanistic_features_checked": [
-    "temp_anomaly",
-    "degree_days_20",
-    "rainfall_4wk",
-    "temp_optimal",
-    "temp_celsius",
-    "temp_rain_interaction"
-  ],
-  "flagged_features": [],
-  "dropped_features": [],
-  "feature_details": {
-    "temp_anomaly": {
-      "variance": 0.6666666666666666,
-      "uniqueness_rate": 0.5,
-      "non_missing_count": 6,
-      "min_non_missing_samples": 24,
-      "flagged": false,
-      "reasons": []
-    },
-    "degree_days_20": {
-      "variance": 2.9166666666666665,
-      "uniqueness_rate": 1.0,
-      "non_missing_count": 6,
-      "min_non_missing_samples": 24,
-      "flagged": false,
-      "reasons": []
-    },
-    "rainfall_4wk": {
-      "variance": 19.555555555555554,
-      "uniqueness_rate": 0.8333333333333334,
-      "non_missing_count": 6,
-      "min_non_missing_samples": 24,
-      "flagged": false,
-      "reasons": []
-    },
-    "temp_optimal": {
-      "variance": 0.1875,
-      "uniqueness_rate": 0.25,
-      "non_missing_count": 8,
-      "min_non_missing_samples": 24,
-      "flagged": false,
-      "reasons": []
-    },
-    "temp_celsius": {
-      "variance": 2.9166666666666665,
-      "uniqueness_rate": 1.0,
-      "non_missing_count": 6,
-      "min_non_missing_samples": 24,
-      "flagged": false,
-      "reasons": []
-    },
-    "temp_rain_interaction": {
-      "variance": 5011.333333333333,
-      "uniqueness_rate": 1.0,
-      "non_missing_count": 6,
-      "min_non_missing_samples": 24,
-      "flagged": false,
-      "reasons": []
-    }
-  }
+  "missing_required_features": [],
+  "distribution_fit_columns": [],
+  "input_date_issues": [],
+  "leakage_columns_detected_in_input": []
 }

@@ -1,6 +1,22 @@
 {
-  "run_id": "20260305T082730Z-cbe2e90e",
-  "track": "bayesian_oof",
-  "suppressed": true,
-  "reason": "bayesian_headline_not_available"
+  "accuracy": 0.6748689906584644,
+  "precision": 0.27826058653126323,
+  "recall": 1.0,
+  "f1": 0.4353738032185781,
+  "kappa": 0.0,
+  "brier": 0.21474223340971174,
+  "false_alarm_rate": 0.12988184360061333,
+  "roc_auc": 0.5625945405284292,
+  "pr_auc": 0.32095144013525945,
+  "lead_time_mean": 0.39923773225345405,
+  "lead_time_utility": 0.33158646974749884,
+  "threshold_used": 0.0,
+  "balanced_threshold_used": 0.16,
+  "balanced_threshold_optimized": true,
+  "balanced_threshold_sample_size": 30723,
+  "balanced_threshold_accuracy": 0.3897731341340364,
+  "balanced_threshold_precision": 0.2934337910641228,
+  "balanced_threshold_recall": 0.847350567317815,
+  "balanced_threshold_f1": 0.43591286556745695,
+  "balanced_threshold_kappa": 0.03842414646126335
 }
