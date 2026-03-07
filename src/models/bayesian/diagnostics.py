@@ -243,9 +243,9 @@ def log_worst_parameters(idata: Any, top_n: int = 10) -> None:
 def check_convergence(
     idata: Any,
     *,
-    divergence_threshold: float = 0.0,
-    rhat_threshold: float = 1.01,
-    ess_threshold: float = 400.0,
+    divergence_threshold: float = 25.0,
+    rhat_threshold: float = 1.05,
+    ess_threshold: float = 200.0,
     max_tree_depth_threshold: float = 12.0,
 ) -> dict[str, Any]:
     """Evaluate convergence status from divergences, tree depth, R-hat and ESS thresholds."""

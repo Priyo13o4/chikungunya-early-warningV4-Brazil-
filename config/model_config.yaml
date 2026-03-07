@@ -22,12 +22,12 @@ bayesian_model:
     - humidity
   # sampling_backend: auto|pymc|jax_numpyro
   sampling_backend: auto
-  # Testing-phase defaults: keep these light; increase gradually for final thesis runs.
-  draws: 600
-  tune: 600
+  # Canonical full-run defaults.
+  draws: 1500
+  tune: 1000
   chains: 4
   bayesian_progress: false
-  target_accept: 0.95
+  target_accept: 0.90
   max_treedepth: 12
   force_full_bayesian: false
   # Optional: strict|warn. If omitted, strict applies only in strict/full runs;
@@ -47,24 +47,13 @@ bayesian_model:
   outbreak_threshold_default_cases: 1.0
   posterior_sample_cap: 500
   predictive_chunk_rows: 4000
+  mechanistic_boundary_policy: lagged_1
+
+feature_engineering:
+  mechanistic:
+    leading_boundary_policy: lagged_1
 
 bayesian_model_profiles:
-  # Fast profile for iterative CV/testing.
-  cv:
-    chains: 4
-    tune: 1000
-    draws: 1000
-    target_accept: 0.90
-    max_treedepth: 12
-    bayesian_progress: false
-  # Still moderate for fullfit while remaining testing-friendly.
-  final:
-    chains: 4
-    tune: 1000
-    draws: 1000
-    target_accept: 0.90
-    max_treedepth: 12
-    bayesian_progress: false
   # Minimal smoke/dev profile.
   dev:
     chains: 1
@@ -90,7 +79,7 @@ decision:
   optimization_risk_basis: bayesian_oof_risk_mean
   optimization_min_samples: 100
   optimization_grid_size: 101
-  optimization_grid_min: 0.0
+  optimization_grid_min: 0.05
   optimization_grid_max: 1.0
   risk_score_basis: bayesian_oof_risk_mean
   alert_thresholds:

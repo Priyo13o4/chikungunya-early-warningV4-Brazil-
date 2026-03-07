@@ -67,6 +67,7 @@ def build_feature_matrix(
     required_features: Sequence[str] = DEFAULT_REQUIRED_FEATURES,
     write_output: bool = True,
     output_path: Path | None = None,
+    mechanistic_boundary_policy: str = "lagged_1",
 ) -> pd.DataFrame:
     """Run feature engineering stages and optionally persist output.
 
@@ -99,6 +100,7 @@ def build_feature_matrix(
         date_column=date_column,
         district_column=district_column,
         enable_climate_features=has_mechanistic_sources,
+        leading_boundary_policy=mechanistic_boundary_policy,
     )
 
     impossible_columns: list[str] = []
@@ -166,6 +168,7 @@ def run(
     required_features: Sequence[str] = DEFAULT_REQUIRED_FEATURES,
     write_output: bool = True,
     output_path: Path | None = None,
+    mechanistic_boundary_policy: str = "lagged_1",
 ) -> pd.DataFrame:
     """Entrypoint for feature matrix assembly."""
     return build_feature_matrix(
@@ -182,4 +185,5 @@ def run(
         required_features=required_features,
         write_output=write_output,
         output_path=output_path,
+        mechanistic_boundary_policy=mechanistic_boundary_policy,
     )

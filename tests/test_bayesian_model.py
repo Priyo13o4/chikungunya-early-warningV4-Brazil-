@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from src.models.bayesian import hierarchical_model
 from src.pipeline_runtime import config_runtime
+from src.pipeline_runtime.phases_bayesian import _impute_selected_covariates_for_bayesian
+from src.pipeline_runtime.phases_bayesian import evaluate_strict_convergence_with_groups
 import run_pipeline
 
 
@@ -77,6 +80,79 @@ def test_bayesian_model_fit_predict() -> None:
         hierarchical_model._require_pymc_dependencies = original_loader
 
     assert len(preds) == 3
+
+
+def test_bayesian_predict_records_covariate_order_reorder_metadata() -> None:
+    original_loader = hierarchical_model._require_pymc_dependencies
+
+    def _missing_optional_dependencies():
+        raise ImportError("optional deps missing in test")
+
+    hierarchical_model._require_pymc_dependencies = _missing_optional_dependencies
+    try:
+        X = _base_bayesian_fit_frame().copy()
+        y = pd.Series([0.0, 1.0, 2.0])
+        model = hierarchical_model.HierarchicalBayesianModel().fit(X, y)
+
+        shuffled_columns = [
+            "district",
+            "date",
+            "weekofyear",
+            "year",
+            "month",
+            "receptivo",
+            "p_rt1",
+            "rt",
+        ]
+        _, metadata = model.predict_with_uncertainty(X[shuffled_columns])
+    finally:
+        hierarchical_model._require_pymc_dependencies = original_loader
+
+    assert metadata.get("trained_covariate_order") == ["month", "year", "weekofyear"]
+    alignment = metadata.get("covariate_alignment", {})
+    assert alignment.get("covariate_order_mismatch_reordered") is True
+    assert alignment.get("trained_covariate_order_locked") is True
+
+
+def test_bayesian_predict_raises_on_missing_required_trained_covariate() -> None:
+    original_loader = hierarchical_model._require_pymc_dependencies
+
+    def _missing_optional_dependencies():
+        raise ImportError("optional deps missing in test")
+
+    hierarchical_model._require_pymc_dependencies = _missing_optional_dependencies
+    try:
+        X = _base_bayesian_fit_frame().copy()
+        y = pd.Series([0.0, 1.0, 2.0])
+        model = hierarchical_model.HierarchicalBayesianModel().fit(X, y)
+        missing = X.drop(columns=["month"])
+        with pytest.raises(ValueError, match="missing required climate covariates"):
+            model.predict_with_uncertainty(missing)
+    finally:
+        hierarchical_model._require_pymc_dependencies = original_loader
+
+
+def test_imputation_alignment_safety_preserves_index_and_rows() -> None:
+    frame = pd.DataFrame(
+        {
+            "district": ["B", "A", "A", "B"],
+            "date": ["2025-01-08", "2025-01-01", "2025-01-08", "2025-01-01"],
+            "rainfall": [np.nan, 1.0, np.nan, 4.0],
+        },
+        index=[10, 11, 12, 13],
+    )
+    stats: dict[str, object] = {}
+    imputed = _impute_selected_covariates_for_bayesian(
+        frame,
+        covariates=["rainfall"],
+        context="test_alignment",
+        imputation_stats=stats,
+    )
+
+    assert list(imputed.index) == [10, 11, 12, 13]
+    assert len(imputed) == len(frame)
+    assert bool(stats.get("alignment_ok")) is True
+    assert int(stats.get("covariates_imputed", 0)) == 1
 
 
 def test_bayesian_predict_with_uncertainty_returns_intervals_and_metadata() -> None:
@@ -234,20 +310,23 @@ def test_select_bayesian_covariates_by_availability_keeps_tiny_null_rate_for_imp
     assert diagnostics["cov_keep"]["imputation_strategy"] == "forward_fill_then_district_median"
 
 
-def test_resolve_bayesian_profile_settings_cv_override_keeps_fullfit_final() -> None:
+def test_resolve_bayesian_profile_settings_profiles_disabled_use_base_settings() -> None:
     fullfit, oof, usage = config_runtime.resolve_bayesian_profile_settings(
         bayesian_settings={"draws": 800, "chains": 2},
         bayesian_profiles={
             "final": {"draws": 1000, "chains": 3},
             "cv": {"draws": 300, "chains": 1},
+            "dev": {"draws": 120, "chains": 1},
         },
-        profile_mode="cv",
+        profile_mode="dev",
+        enable_profiles=False,
     )
 
-    assert int(fullfit["draws"]) == 1000
-    assert int(oof["draws"]) == 300
-    assert usage["fullfit_profile_name"] == "final"
-    assert usage["oof_profile_name"] == "cv"
+    assert int(fullfit["draws"]) == 800
+    assert int(oof["draws"]) == 800
+    assert usage["profiles_enabled"] is False
+    assert usage["fullfit_profile_name"] == "base"
+    assert usage["oof_profile_name"] == "base"
 
 
 def test_parse_memory_optimization_config_false_like_mode_maps_to_off() -> None:
@@ -303,34 +382,93 @@ def test_resolve_bayesian_profile_settings_default_routing() -> None:
             "cv": {"draws": 300, "tune": 500, "bayesian_progress": False},
         },
         profile_mode=None,
+        enable_profiles=False,
     )
 
-    assert int(fullfit["draws"]) == 1000
-    assert int(oof["draws"]) == 300
-    assert usage["fullfit_profile_name"] == "final"
-    assert usage["oof_profile_name"] == "cv"
-    assert usage["cv_profile_differs_from_final"] is True
-    assert "draws" in usage["cv_vs_final_diff_keys"]
+    assert int(fullfit["draws"]) == 800
+    assert int(oof["draws"]) == 800
+    assert usage["profiles_enabled"] is False
+    assert usage["fullfit_profile_name"] == "base"
+    assert usage["oof_profile_name"] == "base"
+    assert usage["cv_profile_differs_from_final"] is False
 
 
 def test_resolve_bayesian_profile_settings_dev_override_applies_to_both() -> None:
     fullfit, oof, usage = config_runtime.resolve_bayesian_profile_settings(
         bayesian_settings={"draws": 800, "chains": 2},
         bayesian_profiles={
-            "final": {"draws": 1000},
-            "cv": {"draws": 400},
             "dev": {"draws": 50, "chains": 1, "bayesian_progress": False},
         },
         profile_mode="dev",
+        enable_profiles=True,
     )
 
     assert int(fullfit["draws"]) == 50
     assert int(oof["draws"]) == 50
     assert int(fullfit["chains"]) == 1
     assert int(oof["chains"]) == 1
+    assert usage["profiles_enabled"] is True
     assert usage["profile_mode_override"] == "dev"
     assert usage["fullfit_profile_name"] == "dev"
     assert usage["oof_profile_name"] == "dev"
+
+
+def test_evaluate_strict_convergence_with_groups_passes_within_thresholds() -> None:
+    grouped = pd.DataFrame(
+        [
+            {"group": "random_effects", "n_parameters": 4, "ess_min": 250.0, "fail_rhat_count": 0, "fail_ess_count": 0},
+            {"group": "fixed_effects", "n_parameters": 3, "ess_min": 300.0, "fail_rhat_count": 0, "fail_ess_count": 0},
+            {"group": "likelihood", "n_parameters": 1, "ess_min": 260.0, "fail_rhat_count": 0, "fail_ess_count": 0},
+            {"group": "temporal_state", "n_parameters": 10, "ess_min": 210.0, "fail_rhat_count": 1, "fail_ess_count": 2},
+            {"group": "other", "n_parameters": 2, "ess_min": 220.0, "fail_rhat_count": 0, "fail_ess_count": 0},
+        ]
+    )
+    converged, details = evaluate_strict_convergence_with_groups(
+        {
+            "converged": True,
+            "divergences": 0.0,
+            "divergence_threshold": 25.0,
+            "max_tree_depth": 8.0,
+            "max_tree_depth_threshold": 12.0,
+            "ess_threshold": 200.0,
+        },
+        grouped,
+        temporal_fail_fraction_threshold=0.30,
+        temporal_rhat_fail_fraction_threshold=0.30,
+    )
+
+    assert converged is True
+    assert details["hard_fail_global"] is False
+    assert details["strict_fail_reasons"] == []
+
+
+def test_evaluate_strict_convergence_with_groups_fails_when_thresholds_violated() -> None:
+    grouped = pd.DataFrame(
+        [
+            {"group": "random_effects", "n_parameters": 3, "ess_min": 100.0, "fail_rhat_count": 1, "fail_ess_count": 1},
+            {"group": "fixed_effects", "n_parameters": 2, "ess_min": 150.0, "fail_rhat_count": 0, "fail_ess_count": 1},
+            {"group": "likelihood", "n_parameters": 1, "ess_min": 190.0, "fail_rhat_count": 0, "fail_ess_count": 1},
+            {"group": "temporal_state", "n_parameters": 10, "ess_min": 120.0, "fail_rhat_count": 4, "fail_ess_count": 5},
+            {"group": "other", "n_parameters": 4, "ess_min": 100.0, "fail_rhat_count": 3, "fail_ess_count": 3},
+        ]
+    )
+    converged, details = evaluate_strict_convergence_with_groups(
+        {
+            "converged": False,
+            "divergences": 30.0,
+            "divergence_threshold": 25.0,
+            "max_tree_depth": 13.0,
+            "max_tree_depth_threshold": 12.0,
+            "ess_threshold": 200.0,
+        },
+        grouped,
+        temporal_fail_fraction_threshold=0.20,
+        temporal_rhat_fail_fraction_threshold=0.20,
+    )
+
+    assert converged is False
+    assert details["hard_fail_global"] is True
+    assert details["strict_fail_reasons"]
 
 
 def test_auto_sampling_backend_on_metal_attempts_jax_then_falls_back(monkeypatch) -> None:

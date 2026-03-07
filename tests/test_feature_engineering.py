@@ -137,3 +137,23 @@ def test_mechanistic_climate_features_are_lagged_by_one_week() -> None:
     assert features.loc[2, "rainfall_4wk"] == 11.0
     assert pd.isna(features.loc[0, "temp_rain_interaction"])
     assert features.loc[1, "temp_rain_interaction"] == 20.0
+
+
+def test_mechanistic_climate_features_support_lagged_two_boundary_policy() -> None:
+    df = pd.DataFrame(
+        {
+            "date": ["2025-01-01", "2025-01-08", "2025-01-15", "2025-01-22"],
+            "district": ["A", "A", "A", "A"],
+            "temperature": [20.0, 21.0, 22.0, 23.0],
+            "rainfall": [1.0, 10.0, 100.0, 1000.0],
+        }
+    )
+
+    features = build_mechanistic_features(df, leading_boundary_policy="lagged_2")
+
+    assert pd.isna(features.loc[0, "temp_celsius"])
+    assert pd.isna(features.loc[1, "temp_celsius"])
+    assert features.loc[2, "temp_celsius"] == 20.0
+    assert pd.isna(features.loc[0, "rainfall_4wk"])
+    assert pd.isna(features.loc[1, "rainfall_4wk"])
+    assert features.loc[2, "rainfall_4wk"] == 1.0

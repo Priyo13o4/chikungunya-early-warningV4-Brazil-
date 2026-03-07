@@ -224,6 +224,7 @@ def _call_build_feature_matrix_compat(
     output_path: Path,
     enable_quality_gate: bool,
     quality_gate_report_path: Path,
+    mechanistic_boundary_policy: str,
 ) -> pd.DataFrame:
     signature = inspect.signature(feature_callable)
     parameters = signature.parameters
@@ -235,6 +236,7 @@ def _call_build_feature_matrix_compat(
         "output_path": output_path,
         "enable_quality_gate": enable_quality_gate,
         "quality_gate_report_path": quality_gate_report_path,
+        "mechanistic_boundary_policy": mechanistic_boundary_policy,
     }
     if not accepts_var_kwargs:
         kwargs = {key: value for key, value in kwargs.items() if key in parameters}
@@ -248,6 +250,7 @@ def _call_build_feature_matrix_compat(
                 "strict_validation": strict_validation,
                 "write_output": write_output,
                 "output_path": output_path,
+                "mechanistic_boundary_policy": mechanistic_boundary_policy,
             }
             if not accepts_var_kwargs:
                 fallback_kwargs = {key: value for key, value in fallback_kwargs.items() if key in parameters}
@@ -594,63 +597,6 @@ def _cleanup_nonessential_metric_csvs(metrics_dir: Path) -> None:
             LOGGER.info("Removed legacy non-essential metrics CSV: %s", path)
 
 
-def _cleanup_legacy_figure_placeholders(figures_dir: Path) -> None:
-    """Remove legacy placeholders and superseded figure artifacts."""
-    legacy_placeholders = {
-        "diagnostic_plots.txt",
-        "exploratory_summary.txt",
-        "feature_plots.txt",
-        "performance_plots.txt",
-        "risk_maps.txt",
-        "diagnostic_trace_plot_skipped.txt",
-        "features_shap_summary_skipped.txt",
-        "risk_alerts_map_skipped.txt",
-    }
-    for path in figures_dir.glob("*.txt"):
-        if path.name in legacy_placeholders:
-            path.unlink(missing_ok=True)
-            LOGGER.info("Removed legacy figure placeholder: %s", path)
-
-    superseded_figures = {
-        "performance_track_metric_comparison_bar.png",
-        "track_comparison_shared_metrics.png",
-    }
-    for filename in superseded_figures:
-        legacy_path = figures_dir / filename
-        if legacy_path.exists():
-            legacy_path.unlink(missing_ok=True)
-            LOGGER.info("Removed superseded figure artifact: %s", legacy_path)
-
-
-def _extract_feature_importances(
-    models: dict[str, Any],
-    feature_names: list[str],
-) -> pd.Series | None:
-    """Aggregate model-specific importances into a single ranked series."""
-    if not models or not feature_names:
-        return None
-
-    collected: list[pd.Series] = []
-    for model_name, model in models.items():
-        values: np.ndarray | None = None
-        if hasattr(model, "feature_importances_"):
-            values = np.asarray(getattr(model, "feature_importances_"), dtype=float)
-        elif hasattr(model, "coef_"):
-            coef_values = np.asarray(getattr(model, "coef_"), dtype=float)
-            values = np.abs(coef_values).mean(axis=0) if coef_values.ndim > 1 else np.abs(coef_values)
-
-        if values is None or values.size != len(feature_names):
-            continue
-
-        importance = pd.Series(values, index=feature_names, dtype=float)
-        importance.name = str(model_name)
-        collected.append(importance)
-
-    if not collected:
-        return None
-    return pd.concat(collected, axis=1).mean(axis=1).sort_values(ascending=False)
-
-
 def run(
     *,
     model_config_path: Path = Path("config/model_config.yaml"),
@@ -671,6 +617,7 @@ def run(
     strict_feature_gate: bool = True,
     force_full_bayesian: bool = False,
     bayesian_overrides: dict[str, Any] | None = None,
+    enable_bayesian_profiles: bool = False,
     bayesian_profile_mode: str | None = None,
     export_detailed_csv: bool = False,
     model_names: list[str] | None = None,
@@ -763,6 +710,7 @@ def run(
         bayesian_settings=bayesian_settings,
         bayesian_profiles=bayesian_profiles,
         profile_mode=bayesian_profile_mode,
+        enable_profiles=bool(enable_bayesian_profiles),
     )
 
     # CLI overrides are applied to both paths so tests and fullfit stay in sync when explicitly overridden.
@@ -799,6 +747,15 @@ def run(
     decision_settings = raw_model_config.get("decision", {})
     if not isinstance(decision_settings, dict):
         decision_settings = {}
+    feature_engineering_settings = raw_model_config.get("feature_engineering", {})
+    if not isinstance(feature_engineering_settings, dict):
+        feature_engineering_settings = {}
+    mechanistic_settings = feature_engineering_settings.get("mechanistic", {})
+    if not isinstance(mechanistic_settings, dict):
+        mechanistic_settings = {}
+    mechanistic_boundary_policy = str(
+        mechanistic_settings.get("leading_boundary_policy", bayesian_settings.get("mechanistic_boundary_policy", "lagged_1"))
+    )
 
     decision_policy_version = str(decision_settings.get("policy_version", "v1"))
     decision_optimize_threshold = bool(decision_settings.get("optimize_threshold", True))
@@ -977,6 +934,7 @@ def run(
         output_path=feature_output,
         enable_quality_gate=True,
         quality_gate_report_path=feature_quality_gate_path,
+        mechanistic_boundary_policy=mechanistic_boundary_policy,
     )
     _assert_no_forbidden_feature_columns(
         features_df,
@@ -1031,6 +989,7 @@ def run(
                 "strict_feature_gate": strict_feature_gate,
                 "force_full_bayesian": force_full_bayesian,
                 "bayesian_overrides": bayesian_overrides,
+                "enable_bayesian_profiles": enable_bayesian_profiles,
                 "bayesian_profile_mode": bayesian_profile_mode,
                 "export_detailed_csv": export_detailed_csv,
                 "model_names": model_names,
@@ -1473,6 +1432,7 @@ def main() -> None:
             "force_full_bayesian": args.force_full_bayesian,
         },
         bayesian_profile_mode=args.bayesian_profile_mode,
+        enable_bayesian_profiles=args.enable_bayesian_profiles,
         export_detailed_csv=args.export_detailed_csv,
         model_names=args.model_names,
         seed=args.seed,

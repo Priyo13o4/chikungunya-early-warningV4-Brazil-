@@ -28,7 +28,7 @@ _DEFAULT_BAYESIAN_CLIMATE_COVARIATES: tuple[str, ...] = (
 _BAYESIAN_COVARIATE_MIN_VARIANCE: float = 1e-12
 _BAYESIAN_COVARIATE_NULL_RATE_IMPUTE_MAX: float = 0.01
 _BAYESIAN_COVARIATE_NULL_RATE_RESTORE_NAMES: set[str] = {"temperature", "humidity"}
-_SUPPORTED_BAYESIAN_PROFILE_MODES: set[str] = {"cv", "final", "dev"}
+_SUPPORTED_BAYESIAN_PROFILE_MODES: set[str] = {"dev"}
 _BAYESIAN_PROFILE_KEYS: tuple[str, ...] = (
     "chains",
     "tune",
@@ -112,13 +112,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bayesian-target-accept", type=float, default=None, help="Override Bayesian NUTS target_accept")
     parser.add_argument("--bayesian-max-treedepth", type=int, default=None, help="Override Bayesian NUTS max_treedepth")
     parser.add_argument(
+        "--enable-bayesian-profiles",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable Bayesian profile overlays (dev-only). Disabled by default.",
+    )
+    parser.add_argument(
         "--bayesian-profile-mode",
         type=str,
         default=None,
-        choices=["cv", "final", "dev"],
+        choices=["dev"],
         help=(
-            "Optional Bayesian profile override mode. "
-            "When omitted, full-fit uses profile 'final' and OOF CV uses profile 'cv'."
+            "Optional Bayesian profile mode used when --enable-bayesian-profiles is set. "
+            "Currently supported: 'dev'."
         ),
     )
     parser.add_argument(
@@ -630,8 +636,9 @@ def normalize_bayesian_profile_mode(raw_mode: Any) -> str | None:
         return None
     if normalized not in _SUPPORTED_BAYESIAN_PROFILE_MODES:
         LOGGER.warning(
-            "Invalid bayesian profile mode '%s'; ignoring override and using default profile routing",
+            "Invalid bayesian profile mode '%s'; supported modes are: %s. Ignoring.",
             raw_mode,
+            sorted(_SUPPORTED_BAYESIAN_PROFILE_MODES),
         )
         return None
     return normalized
@@ -656,61 +663,47 @@ def resolve_bayesian_profile_settings(
     bayesian_settings: dict[str, Any],
     bayesian_profiles: dict[str, Any] | None,
     profile_mode: str | None,
+    enable_profiles: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     base_settings = dict(bayesian_settings) if isinstance(bayesian_settings, dict) else {}
     raw_profiles = bayesian_profiles if isinstance(bayesian_profiles, dict) else {}
 
-    profile_cv = _sanitize_bayesian_profile(raw_profiles.get("cv"))
-    profile_final = _sanitize_bayesian_profile(raw_profiles.get("final"))
     profile_dev = _sanitize_bayesian_profile(raw_profiles.get("dev"))
     normalized_mode = normalize_bayesian_profile_mode(profile_mode)
 
     warning_flags: list[str] = []
-    if normalized_mode == "dev":
+    profiles_enabled = bool(enable_profiles)
+    if profiles_enabled and normalized_mode == "dev":
         fullfit_profile_name = "dev"
         cv_profile_name = "dev"
         fullfit_overlay = profile_dev
         cv_overlay = profile_dev
         if not profile_dev:
             warning_flags.append("dev_profile_missing_fallback_to_base_settings")
-    elif normalized_mode == "cv":
-        fullfit_profile_name = "final"
-        cv_profile_name = "cv"
-        fullfit_overlay = profile_final
-        cv_overlay = profile_cv
-        if not profile_final:
-            warning_flags.append("final_profile_missing_fallback_to_base_settings")
-        if not profile_cv:
-            warning_flags.append("cv_profile_missing_fallback_to_base_settings")
-    elif normalized_mode == "final":
-        fullfit_profile_name = "final"
-        cv_profile_name = "final"
-        fullfit_overlay = profile_final
-        cv_overlay = profile_final
-        if not profile_final:
-            warning_flags.append("final_profile_missing_fallback_to_base_settings")
     else:
-        fullfit_profile_name = "final"
-        cv_profile_name = "cv"
-        fullfit_overlay = profile_final
-        cv_overlay = profile_cv if profile_cv else profile_final
-        if not profile_final:
-            warning_flags.append("final_profile_missing_fallback_to_base_settings")
-        if not profile_cv:
-            warning_flags.append("cv_profile_missing_fallback_to_final_or_base_settings")
+        fullfit_profile_name = "base"
+        cv_profile_name = "base"
+        fullfit_overlay = {}
+        cv_overlay = {}
+        if profiles_enabled and normalized_mode is None:
+            warning_flags.append("profiles_enabled_without_supported_mode_fallback_to_base_settings")
+        if not profiles_enabled and normalized_mode is not None:
+            warning_flags.append("profile_mode_ignored_profiles_disabled")
 
     fullfit_effective = {**base_settings, **fullfit_overlay}
     cv_effective = {**base_settings, **cv_overlay}
     diff_keys = _profile_diff_keys(fullfit_effective, cv_effective)
 
     metadata = {
+        "profiles_enabled": profiles_enabled,
+        "profile_mode_requested": normalized_mode,
         "profile_mode_override": normalized_mode,
-        "default_routing": "fullfit=final,oof=cv",
+        "default_routing": "fullfit=base,oof=base",
         "fullfit_profile_name": fullfit_profile_name,
         "oof_profile_name": cv_profile_name,
         "declared_profiles": {
-            "cv": profile_cv,
-            "final": profile_final,
+            "cv": {},
+            "final": {},
             "dev": profile_dev,
         },
         "effective_profile_values": {

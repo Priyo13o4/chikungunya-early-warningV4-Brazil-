@@ -83,6 +83,8 @@ class HierarchicalBayesianModel:
     sampling_runtime_backend_: str = "cpu"
     simplified_used_: bool = False
     alpha_nb_: float = 1.0
+    trained_covariate_order_: tuple[str, ...] = field(default_factory=tuple)
+    prediction_covariate_alignment_: dict[str, Any] = field(default_factory=dict)
 
     def _resolve_state_codes(self, frame: pd.DataFrame) -> pd.Series:
         district_values = frame.get(self.config.district_column, pd.Series("unknown", index=frame.index, dtype="object"))
@@ -193,6 +195,7 @@ class HierarchicalBayesianModel:
             "simplified_mode": 0.0,
             "fallback": 1.0,
         }
+        self.trained_covariate_order_ = tuple(self.config.climate_covariates)
         self.fitted_ = True
 
     @staticmethod
@@ -325,6 +328,28 @@ class HierarchicalBayesianModel:
             frame[self.config.date_column] = pd.NaT
 
         frame = self._validate_covariate_contract(frame, context="predict", require_variance=False)
+        expected_covariate_order = tuple(self.trained_covariate_order_ or tuple(self.config.climate_covariates))
+        provided_covariate_order = [column for column in frame.columns if column in expected_covariate_order]
+        missing_covariates = [column for column in expected_covariate_order if column not in frame.columns]
+        if missing_covariates:
+            raise ValueError(
+                "predict: missing required trained covariates "
+                f"{missing_covariates}; expected order={list(expected_covariate_order)}"
+            )
+        covariate_order_mismatch = provided_covariate_order != list(expected_covariate_order)
+        if covariate_order_mismatch:
+            LOGGER.info(
+                "Prediction covariate order mismatch detected; expected=%s provided=%s. Reordering to training order.",
+                list(expected_covariate_order),
+                provided_covariate_order,
+            )
+        self.prediction_covariate_alignment_ = {
+            "expected_covariate_order": list(expected_covariate_order),
+            "provided_covariate_order": provided_covariate_order,
+            "covariate_order_mismatch_reordered": bool(covariate_order_mismatch),
+            "missing_required_covariates": [],
+            "trained_covariate_order_locked": bool(len(expected_covariate_order) > 0),
+        }
         frame["__state_code__"] = self._resolve_state_codes(frame).astype(str).fillna("unknown")
 
         threshold_values, threshold_meta = self._resolve_outbreak_thresholds(frame, outbreak_threshold)
@@ -365,6 +390,8 @@ class HierarchicalBayesianModel:
                 "posterior_samples_used": 0,
                 "degraded_mode": True,
                 "climate_covariates": list(self.config.climate_covariates),
+                "trained_covariate_order": list(expected_covariate_order),
+                "covariate_alignment": dict(self.prediction_covariate_alignment_),
             }
             return risk_frame, metadata
 
@@ -505,6 +532,8 @@ class HierarchicalBayesianModel:
                 "posterior_samples_used": int(n_samples),
                 "degraded_mode": False,
                 "climate_covariates": list(self.config.climate_covariates),
+                "trained_covariate_order": list(expected_covariate_order),
+                "covariate_alignment": dict(self.prediction_covariate_alignment_),
             }
             return risk_frame, metadata
         except Exception as predictive_error:
@@ -528,6 +557,8 @@ class HierarchicalBayesianModel:
                 "posterior_samples_used": 0,
                 "degraded_mode": True,
                 "climate_covariates": list(self.config.climate_covariates),
+                "trained_covariate_order": list(expected_covariate_order),
+                "covariate_alignment": dict(self.prediction_covariate_alignment_),
             }
             return risk_frame, metadata
 
@@ -999,6 +1030,7 @@ class HierarchicalBayesianModel:
 
         self.simplified_used_ = simplified_mode
         self.diagnostics_summary_ = diagnostics_summary
+        self.trained_covariate_order_ = tuple(self.config.climate_covariates)
         self.fitted_ = True
 
     def fit(

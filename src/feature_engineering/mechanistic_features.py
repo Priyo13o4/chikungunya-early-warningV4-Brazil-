@@ -103,6 +103,7 @@ def build_mechanistic_features(
     district_column: str = "district",
     date_column: str = "date",
     enable_climate_features: bool = True,
+    leading_boundary_policy: str = "lagged_1",
 ) -> pd.DataFrame:
     """Build mechanistic, climate-informed features conservatively.
 
@@ -120,7 +121,16 @@ def build_mechanistic_features(
     - Sparse or missing inputs result in safe no-op for specific features.
     - Legacy compatibility feature ``temp_rain_interaction`` is kept when possible.
     """
-    LOGGER.info("Building mechanistic features")
+    normalized_boundary_policy = str(leading_boundary_policy or "lagged_1").strip().lower()
+    lag_steps = 1
+    if normalized_boundary_policy == "lagged_2":
+        lag_steps = 2
+    elif normalized_boundary_policy not in {"lagged_1", "lag1", "default"}:
+        LOGGER.warning(
+            "Unknown mechanistic leading boundary policy '%s'; defaulting to lagged_1",
+            leading_boundary_policy,
+        )
+    LOGGER.info("Building mechanistic features (leading_boundary_policy=%s)", normalized_boundary_policy)
     output = df.copy()
     output["month"] = _ensure_month_column(output, date_column=date_column)
     output["season"] = _extract_season(output["month"])
@@ -138,9 +148,9 @@ def build_mechanistic_features(
     else:
         temp_values = pd.to_numeric(output[temp_column], errors="coerce")
         if district_column in output.columns:
-            temp_values = temp_values.groupby(output[district_column], dropna=False).shift(1)
+            temp_values = temp_values.groupby(output[district_column], dropna=False).shift(lag_steps)
         else:
-            temp_values = temp_values.shift(1)
+            temp_values = temp_values.shift(lag_steps)
         inferred_units = _infer_temperature_units(temp_values, temp_column)
         if inferred_units == "kelvin":
             output["temp_kelvin"] = temp_values
@@ -202,9 +212,9 @@ def build_mechanistic_features(
             LOGGER.warning("Missing date column '%s'; rainfall_4wk will use row order within district", date_column)
         output = output.sort_values(sort_keys).copy()
         rain_numeric = pd.to_numeric(output[rainfall_column], errors="coerce")
-        rain_lagged = rain_numeric.groupby(output[district_column], dropna=False).shift(1)
+        rain_lagged = rain_numeric.groupby(output[district_column], dropna=False).shift(lag_steps)
         output["rainfall_4wk"] = rain_numeric.groupby(output[district_column], dropna=False).transform(
-            lambda series: series.shift(1).rolling(window=4, min_periods=1).sum()
+            lambda series: series.shift(lag_steps).rolling(window=4, min_periods=1).sum()
         )
 
     if lai_column is None:
@@ -212,9 +222,9 @@ def build_mechanistic_features(
     else:
         lai_numeric = pd.to_numeric(output[lai_column], errors="coerce")
         if district_column in output.columns:
-            lai_numeric = lai_numeric.groupby(output[district_column], dropna=False).shift(1)
+            lai_numeric = lai_numeric.groupby(output[district_column], dropna=False).shift(lag_steps)
         else:
-            lai_numeric = lai_numeric.shift(1)
+            lai_numeric = lai_numeric.shift(lag_steps)
         if district_column in output.columns:
             lai_mean = lai_numeric.groupby([output[district_column], output["season"]], dropna=False).transform("mean")
             output["lai_anomaly"] = lai_numeric - lai_mean
@@ -237,6 +247,7 @@ def run(
     district_column: str = "district",
     date_column: str = "date",
     enable_climate_features: bool = True,
+    leading_boundary_policy: str = "lagged_1",
 ) -> pd.DataFrame:
     """Entrypoint for mechanistic feature generation."""
     return build_mechanistic_features(
@@ -244,4 +255,5 @@ def run(
         district_column=district_column,
         date_column=date_column,
         enable_climate_features=enable_climate_features,
+        leading_boundary_policy=leading_boundary_policy,
     )

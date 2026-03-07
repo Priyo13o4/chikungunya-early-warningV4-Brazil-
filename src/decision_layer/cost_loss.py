@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+_THRESHOLD_GRID_MIN_FLOOR = 0.05
 
 
 class AlertLevel(str, Enum):
@@ -111,8 +112,8 @@ def optimize_decision_threshold(
             "method": "fallback_cost_loss_ratio",
         }
 
-    clipped_min = float(min(max(grid_min, 0.0), 1.0))
-    clipped_max = float(min(max(grid_max, 0.0), 1.0))
+    clipped_min = float(min(max(grid_min, _THRESHOLD_GRID_MIN_FLOOR), 1.0))
+    clipped_max = float(min(max(grid_max, _THRESHOLD_GRID_MIN_FLOOR), 1.0))
     if clipped_max < clipped_min:
         clipped_min, clipped_max = clipped_max, clipped_min
     safe_grid_size = max(int(grid_size), 2)

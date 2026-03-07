@@ -179,11 +179,24 @@ def _impute_selected_covariates_for_bayesian(
     context: str,
     district_column: str = "district",
     date_column: str = "date",
+    imputation_stats: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     if frame.empty or not covariates:
+        if imputation_stats is not None:
+            imputation_stats.update(
+                {
+                    "context": context,
+                    "row_count": int(len(frame)),
+                    "reordered": False,
+                    "covariates_imputed": 0,
+                    "alignment_ok": True,
+                }
+            )
         return frame
 
     output = frame.copy()
+    original_index = output.index.copy()
+    original_columns = set(output.columns)
     deterministic_order = output.copy()
     deterministic_order["__row_order__"] = np.arange(len(deterministic_order), dtype=int)
     if district_column in deterministic_order.columns:
@@ -200,6 +213,8 @@ def _impute_selected_covariates_for_bayesian(
         ["__district_sort__", "__date_sort__", "__row_order__"],
         kind="mergesort",
     )
+    reordered = bool(not deterministic_order.index.equals(original_index))
+    covariates_imputed = 0
 
     for covariate in covariates:
         if covariate not in deterministic_order.columns:
@@ -226,6 +241,7 @@ def _impute_selected_covariates_for_bayesian(
 
         deterministic_order[covariate] = filled
         missing_after = int(pd.to_numeric(deterministic_order[covariate], errors="coerce").isna().sum())
+        covariates_imputed += 1
         LOGGER.info(
             "Bayesian covariate imputation (%s): covariate=%s missing %d -> %d using forward_fill_then_district_median",
             context,
@@ -235,7 +251,42 @@ def _impute_selected_covariates_for_bayesian(
         )
 
     deterministic_order = deterministic_order.sort_values("__row_order__", kind="mergesort")
+    if len(deterministic_order) != len(output):
+        raise RuntimeError(
+            "Bayesian covariate imputation changed row count unexpectedly "
+            f"for context='{context}': before={len(output)} after={len(deterministic_order)}"
+        )
+    if not deterministic_order["__row_order__"].to_numpy(dtype=int).tolist() == list(range(len(output))):
+        raise RuntimeError(
+            "Bayesian covariate imputation failed to restore deterministic row order "
+            f"for context='{context}'"
+        )
+    if not deterministic_order.index.equals(original_index):
+        raise RuntimeError(
+            "Bayesian covariate imputation failed to restore original index order "
+            f"for context='{context}'"
+        )
     deterministic_order = deterministic_order.drop(columns=["__row_order__", "__district_sort__", "__date_sort__"])
+    if set(deterministic_order.columns) != original_columns:
+        raise RuntimeError(
+            "Bayesian covariate imputation output columns differ from input "
+            f"for context='{context}'"
+        )
+    if imputation_stats is not None:
+        imputation_stats.update(
+            {
+                "context": context,
+                "row_count": int(len(output)),
+                "reordered": reordered,
+                "covariates_imputed": int(covariates_imputed),
+                "alignment_ok": True,
+            }
+        )
+    if reordered:
+        LOGGER.info(
+            "Bayesian covariate imputation (%s): reordered rows for deterministic fill and restored original order",
+            context,
+        )
     return deterministic_order
 
 
@@ -389,7 +440,7 @@ def evaluate_strict_convergence_with_groups(
     strict_fail_reasons: list[str] = []
     core_ess_fail_groups: list[str] = []
     core_rhat_fail_groups: list[str] = []
-    strict_checks_disabled = True
+    strict_checks_disabled = False
 
     divergence_value = float(convergence.get("divergences", 0.0))
     divergence_threshold = float(convergence.get("divergence_threshold", 0.0))
@@ -398,6 +449,20 @@ def evaluate_strict_convergence_with_groups(
     ess_threshold = float(convergence.get("ess_threshold", 200.0))
 
     hard_fail_global = False
+
+    if bool(convergence.get("converged", True)) is False:
+        hard_fail_global = True
+        strict_fail_reasons.append("global_convergence_flag_failed")
+    if divergence_value > divergence_threshold:
+        hard_fail_global = True
+        strict_fail_reasons.append(
+            f"divergences_exceed_threshold:{divergence_value:.0f}>{divergence_threshold:.0f}"
+        )
+    if max_tree_depth_value > max_tree_depth_threshold:
+        hard_fail_global = True
+        strict_fail_reasons.append(
+            f"max_tree_depth_exceeds_threshold:{max_tree_depth_value:.0f}>{max_tree_depth_threshold:.0f}"
+        )
 
     grouped_frame = grouped_diagnostics if isinstance(grouped_diagnostics, pd.DataFrame) else pd.DataFrame()
 
@@ -437,6 +502,15 @@ def evaluate_strict_convergence_with_groups(
         if rhat_fail_count > 0:
             core_rhat_fail_groups.append(group_name)
 
+    if core_ess_fail_groups:
+        strict_fail_reasons.append(
+            "core_ess_groups_failed:" + ",".join(sorted(set(core_ess_fail_groups)))
+        )
+    if core_rhat_fail_groups:
+        strict_fail_reasons.append(
+            "core_rhat_groups_failed:" + ",".join(sorted(set(core_rhat_fail_groups)))
+        )
+
     temporal_fail_fraction: float | None = None
     temporal_rhat_fail_fraction: float | None = None
     temporal_row = _group_row("temporal_state")
@@ -445,11 +519,17 @@ def evaluate_strict_convergence_with_groups(
         temporal_fail_count = _safe_int(temporal_row, "fail_ess_count")
         temporal_fail_fraction = float(temporal_fail_count / max(temporal_n_parameters, 1))
         if temporal_fail_fraction > float(temporal_fail_fraction_threshold):
-            pass
+            strict_fail_reasons.append(
+                "temporal_ess_fail_fraction_exceeds_threshold:"
+                f"{temporal_fail_fraction:.4f}>{float(temporal_fail_fraction_threshold):.4f}"
+            )
         temporal_rhat_fail_count = _safe_int(temporal_row, "fail_rhat_count")
         temporal_rhat_fail_fraction = float(temporal_rhat_fail_count / max(temporal_n_parameters, 1))
         if temporal_rhat_fail_fraction > float(temporal_rhat_fail_fraction_threshold):
-            pass
+            strict_fail_reasons.append(
+                "temporal_rhat_fail_fraction_exceeds_threshold:"
+                f"{temporal_rhat_fail_fraction:.4f}>{float(temporal_rhat_fail_fraction_threshold):.4f}"
+            )
 
     other_fail_fraction: float | None = None
     other_rhat_fail_fraction: float | None = None
@@ -459,14 +539,23 @@ def evaluate_strict_convergence_with_groups(
         other_fail_count = _safe_int(other_row, "fail_ess_count")
         other_fail_fraction = float(other_fail_count / max(other_n_parameters, 1))
         if other_fail_fraction > 0.5:
-            pass
+            strict_fail_reasons.append(
+                f"other_ess_fail_fraction_exceeds_threshold:{other_fail_fraction:.4f}>0.5000"
+            )
         other_rhat_fail_count = _safe_int(other_row, "fail_rhat_count")
         other_rhat_fail_fraction = float(other_rhat_fail_count / max(other_n_parameters, 1))
         if other_rhat_fail_fraction > 0.5:
-            pass
+            strict_fail_reasons.append(
+                f"other_rhat_fail_fraction_exceeds_threshold:{other_rhat_fail_fraction:.4f}>0.5000"
+            )
 
-    strict_converged = True
+    global_converged = bool(convergence.get("converged", False))
+    strict_converged = bool((not strict_fail_reasons) and (not hard_fail_global))
+    effective_converged = bool(global_converged and strict_converged)
     details = {
+        "global_converged": bool(global_converged),
+        "strict_converged": bool(strict_converged),
+        "effective_converged": bool(effective_converged),
         "strict_policy": "group_aware_v1",
         "strict_checks_disabled": bool(strict_checks_disabled),
         "hard_fail_global": bool(hard_fail_global),
@@ -478,7 +567,7 @@ def evaluate_strict_convergence_with_groups(
         "temporal_rhat_fail_fraction_threshold": float(temporal_rhat_fail_fraction_threshold),
         "other_fail_fraction": other_fail_fraction,
         "other_rhat_fail_fraction": other_rhat_fail_fraction,
-        "strict_fail_reasons": strict_fail_reasons,
+        "strict_fail_reasons": sorted(set(strict_fail_reasons)),
     }
     return strict_converged, details
 
@@ -1059,10 +1148,16 @@ def run_bayesian_phase(
     bayesian_sampling_diagnostics: dict[str, Any] = {
         "climate_covariates": configured_covariates,
         "climate_covariates_requested": list(configured_covariates),
+        "trained_covariate_order": list(configured_covariates),
+        "trained_covariate_order_locked": False,
         "covariate_selection": default_covariate_selection,
         "mode_used": "not_run" if skip_bayesian else "pending",
         "degraded_mode": False,
         "fallback_used": False,
+        "label_uses_future_shift": True,
+        "full_fit_retrospective_only": True,
+        "prospective_claim_allowed": False,
+        "training_mode": "not_run" if skip_bayesian else "pending",
         "oof_execution_mode_requested": str(
             bayesian_settings_cv.get("oof_execution_mode", bayesian_settings_fullfit.get("oof_execution_mode", "conditional"))
         ),
@@ -1118,6 +1213,8 @@ def run_bayesian_phase(
         )
         bayesian_sampling_diagnostics["covariate_selection"] = covariate_selection
         bayesian_sampling_diagnostics["climate_covariates"] = selected_covariates
+        bayesian_sampling_diagnostics["trained_covariate_order"] = list(selected_covariates)
+        bayesian_sampling_diagnostics["trained_covariate_order_locked"] = bool(len(selected_covariates) > 0)
 
         if not selected_covariates:
             LOGGER.warning(
@@ -1147,11 +1244,14 @@ def run_bayesian_phase(
         else:
             bayesian_settings_fullfit["climate_covariates"] = list(selected_covariates)
             bayesian_settings_cv["climate_covariates"] = list(selected_covariates)
+            fullfit_imputation_stats: dict[str, Any] = {}
             subset_model_input_df = _impute_selected_covariates_for_bayesian(
                 subset_model_input_df,
                 covariates=selected_covariates,
                 context="fullfit_subset",
+                imputation_stats=fullfit_imputation_stats,
             )
+            bayesian_sampling_diagnostics["covariate_imputation"] = fullfit_imputation_stats
 
             bayes_track_kwargs: dict[str, Any] = {
                 "outbreak_threshold": subset_threshold_series,
@@ -1271,6 +1371,9 @@ def run_bayesian_phase(
                 temporal_index=temporal_index.loc[subset_index] if temporal_index is not None else None,
                 district=district_index.loc[subset_index] if district_index is not None else None,
             )
+            bayesian_sampling_diagnostics["training_mode"] = "fullfit"
+            bayesian_sampling_diagnostics["full_fit_retrospective_only"] = True
+            bayesian_sampling_diagnostics["prospective_claim_allowed"] = False
             safe_write_json_fn(bayesian_metrics_fullfit, paths.outputs_metrics / "bayesian_metrics_fullfit.json")
             state.artifacts["bayesian_metrics_fullfit"] = paths.outputs_metrics / "bayesian_metrics_fullfit.json"
 
@@ -1430,6 +1533,9 @@ def run_bayesian_phase(
                         temporal_index=temporal_index.loc[valid_bayes_oof_mask] if temporal_index is not None else None,
                         district=district_index.loc[valid_bayes_oof_mask] if district_index is not None else None,
                     )
+                    bayesian_sampling_diagnostics["training_mode"] = "oof_crossval"
+                    bayesian_sampling_diagnostics["full_fit_retrospective_only"] = True
+                    bayesian_sampling_diagnostics["prospective_claim_allowed"] = True
                     safe_write_json_fn(bayesian_metrics, paths.outputs_metrics / "bayesian_metrics.json")
                     state.artifacts["bayesian_metrics"] = paths.outputs_metrics / "bayesian_metrics.json"
                     bayesian_headline_eligible = True
@@ -1547,7 +1653,18 @@ def run_bayesian_phase(
                             "compute_backend_fallback_reason"
                         ),
                         "grouped_diagnostics": grouped_records,
+                        "global_converged": bool(strict_details.get("global_converged", convergence.get("converged", False))),
                         "strict_converged": bool(strict_converged),
+                        "effective_converged": bool(
+                            strict_details.get(
+                                "effective_converged",
+                                bool(
+                                    strict_details.get("global_converged", convergence.get("converged", False))
+                                    and strict_converged
+                                ),
+                            )
+                        ),
+                        "convergence_mode_used": str(convergence_failure_mode),
                         "strict_policy": str(strict_details.get("strict_policy", "group_aware_v1")),
                         "hard_fail_global": bool(strict_details.get("hard_fail_global", False)),
                         "strict_fail_reasons": list(strict_details.get("strict_fail_reasons", [])),
@@ -1565,12 +1682,13 @@ def run_bayesian_phase(
                         "other_rhat_fail_fraction": strict_details.get("other_rhat_fail_fraction"),
                     }
                 )
-                convergence_log_fn = LOGGER.info if bool(convergence.get("strict_converged", True)) else LOGGER.warning
+                convergence_log_fn = LOGGER.info if bool(convergence.get("effective_converged", True)) else LOGGER.warning
                 convergence_log_fn(
-                    "Bayesian convergence summary: converged=%s strict_converged=%s mode=%s divergences=%.0f r_hat_max=%.4f ess_min=%.1f grouped_fails(rhat=%d,ess=%d)",
-                    bool(convergence.get("converged", False)),
+                    "Bayesian convergence summary: global_converged=%s strict_converged=%s effective_converged=%s mode=%s divergences=%.0f r_hat_max=%.4f ess_min=%.1f grouped_fails(rhat=%d,ess=%d)",
+                    bool(convergence.get("global_converged", convergence.get("converged", False))),
                     bool(convergence.get("strict_converged", False)),
-                    str(convergence.get("mode_used", "unknown")),
+                    bool(convergence.get("effective_converged", False)),
+                    str(convergence.get("convergence_mode_used", convergence_failure_mode)),
                     float(convergence.get("divergences", 0.0)),
                     float(convergence.get("r_hat_max", 1.0)),
                     float(convergence.get("ess_min", 0.0)),
@@ -1597,13 +1715,13 @@ def run_bayesian_phase(
                 safe_write_json_fn(mode_artifact, bayesian_diag_dir / "mode.json")
                 state.artifacts["bayesian_mode"] = bayesian_diag_dir / "mode.json"
 
-                if not bool(convergence.get("strict_converged", False)):
+                if not bool(convergence.get("effective_converged", False)):
                     bayesian_converged = False
                     state.degraded_reasons.append(
                         {
                             "code": "bayesian_convergence_failed",
                             "mode_used": str(convergence.get("mode_used", "unknown")),
-                            "reason": "strict_convergence_not_met",
+                            "reason": "effective_convergence_not_met",
                         }
                     )
                     bayesian_headline_eligible = False
@@ -1615,10 +1733,11 @@ def run_bayesian_phase(
                     safe_write_json_fn(bayesian_metrics, paths.outputs_metrics / "bayesian_metrics.json")
                     state.artifacts["bayesian_metrics"] = paths.outputs_metrics / "bayesian_metrics.json"
                     LOGGER.warning(
-                        "Bayesian strict convergence failure handled in '%s' mode: strict_converged=%s, converged=%s, divergences=%.0f, max_tree_depth=%.0f, r_hat_max=%.4f, ess_min=%.1f, core_ess_fail_groups=%s, strict_fail_reasons=%s",
+                        "Bayesian convergence failure handled in '%s' mode: global_converged=%s strict_converged=%s effective_converged=%s divergences=%.0f, max_tree_depth=%.0f, r_hat_max=%.4f, ess_min=%.1f, core_ess_fail_groups=%s, strict_fail_reasons=%s",
                         convergence_failure_mode,
+                        bool(convergence.get("global_converged", convergence.get("converged", False))),
                         bool(convergence.get("strict_converged", False)),
-                        bool(convergence.get("converged", False)),
+                        bool(convergence.get("effective_converged", False)),
                         convergence["divergences"],
                         convergence["max_tree_depth"],
                         convergence["r_hat_max"],

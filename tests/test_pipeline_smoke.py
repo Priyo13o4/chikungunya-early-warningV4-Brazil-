@@ -786,7 +786,7 @@ def test_bayesian_subset_metadata_emitted(tmp_path, monkeypatch) -> None:
     assert memory_report.get("mode") == "off"
 
 
-def test_bayesian_profiles_route_fullfit_and_oof_settings(tmp_path, monkeypatch) -> None:
+def test_bayesian_profiles_disabled_by_default_use_base_for_fullfit_and_oof(tmp_path, monkeypatch) -> None:
     synthetic = pd.DataFrame(
         {
             "date": pd.date_range("2014-01-01", periods=24, freq="MS").astype(str),
@@ -812,16 +812,11 @@ def test_bayesian_profiles_route_fullfit_and_oof_settings(tmp_path, monkeypatch)
                 "  chains: 2",
                 "  target_accept: 0.99",
                 "bayesian_model_profiles:",
-                "  cv:",
+                "  dev:",
                 "    draws: 120",
                 "    tune: 200",
                 "    chains: 1",
                 "    bayesian_progress: false",
-                "  final:",
-                "    draws: 900",
-                "    tune: 1300",
-                "    chains: 2",
-                "    bayesian_progress: true",
             ]
         ),
         encoding="utf-8",
@@ -887,9 +882,113 @@ def test_bayesian_profiles_route_fullfit_and_oof_settings(tmp_path, monkeypatch)
         skip_visualizations=True,
     )
 
-    assert int(observed_fullfit.get("draws", 0)) == 900
+    assert int(observed_fullfit.get("draws", 0)) == 800
+    assert int(observed_oof.get("draws", 0)) == 800
+    assert int(observed_fullfit.get("tune", 0)) == 1200
+    assert int(observed_oof.get("tune", 0)) == 1200
+
+
+def test_bayesian_dev_profile_opt_in_applies_to_fullfit_and_oof(tmp_path, monkeypatch) -> None:
+    synthetic = pd.DataFrame(
+        {
+            "date": pd.date_range("2014-01-01", periods=24, freq="MS").astype(str),
+            "district": (["A", "B", "C", "D"] * 6),
+            "state": ["S"] * 24,
+            "cases": list(range(1, 25)),
+            "rainfall": [float(i % 7) for i in range(24)],
+            "temperature": [28.0 + float(i % 3) for i in range(24)],
+            "humidity": [60.0 + float(i % 5) for i in range(24)],
+        }
+    )
+    raw_path = tmp_path / "synthetic_profile_dev_optin_raw.csv"
+    synthetic.to_csv(raw_path, index=False)
+
+    model_config_path = tmp_path / "model_config_profiles_dev_optin.yaml"
+    model_config_path.write_text(
+        "\n".join(
+            [
+                "bayesian_model:",
+                "  sampling_backend: auto",
+                "  draws: 800",
+                "  tune: 1200",
+                "  chains: 2",
+                "  target_accept: 0.99",
+                "bayesian_model_profiles:",
+                "  dev:",
+                "    draws: 120",
+                "    tune: 200",
+                "    chains: 1",
+                "    bayesian_progress: false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    observed_fullfit: dict[str, object] = {}
+    observed_oof: dict[str, object] = {}
+
+    def fake_run_bayesian_track(features_df, count_target, *, outbreak_threshold, strict_dependencies, bayesian_settings, **kwargs):
+        features_df
+        count_target
+        outbreak_threshold
+        strict_dependencies
+        kwargs
+        observed_fullfit.update(
+            {
+                "draws": bayesian_settings.get("draws"),
+                "tune": bayesian_settings.get("tune"),
+                "chains": bayesian_settings.get("chains"),
+            }
+        )
+        n = len(features_df)
+        risk_frame = pd.DataFrame(
+            {
+                "risk_mean": [0.4] * n,
+                "risk_q05": [0.2] * n,
+                "risk_q95": [0.8] * n,
+                "threshold_cases": [1.0] * n,
+                "bayesian_risk": [0.4] * n,
+            }
+        )
+        return risk_frame, None, {
+            "fallback_used": False,
+            "degraded_mode": False,
+            "mode_used": "full_latent_ar",
+            "threshold_basis": "provided_series",
+            "threshold_default": 1.0,
+            "interval_source": "posterior",
+            "posterior_samples_used": 10,
+        }
+
+    def fake_collect_bayesian_oof_scores(**kwargs):
+        settings = kwargs.get("bayesian_settings", {})
+        observed_oof.update(
+            {
+                "draws": settings.get("draws"),
+                "tune": settings.get("tune"),
+                "chains": settings.get("chains"),
+            }
+        )
+        features = kwargs["features_df"]
+        return pd.Series([0.5] * len(features), index=features.index, dtype="float64")
+
+    monkeypatch.setattr("run_pipeline._run_bayesian_track", fake_run_bayesian_track)
+    monkeypatch.setattr("run_pipeline._collect_bayesian_oof_scores", fake_collect_bayesian_oof_scores)
+
+    run(
+        model_config_path=model_config_path,
+        raw_data_path=raw_path,
+        start_year=2014,
+        end_year=2015,
+        skip_baselines=True,
+        skip_visualizations=True,
+        enable_bayesian_profiles=True,
+        bayesian_profile_mode="dev",
+    )
+
+    assert int(observed_fullfit.get("draws", 0)) == 120
     assert int(observed_oof.get("draws", 0)) == 120
-    assert int(observed_fullfit.get("tune", 0)) == 1300
+    assert int(observed_fullfit.get("tune", 0)) == 200
     assert int(observed_oof.get("tune", 0)) == 200
 
 
@@ -913,12 +1012,6 @@ def test_bayesian_profile_metadata_fields_present_and_consistent(tmp_path, monke
         "\n".join(
             [
                 "bayesian_model_profiles:",
-                "  cv:",
-                "    draws: 120",
-                "    tune: 200",
-                "  final:",
-                "    draws: 900",
-                "    tune: 1300",
                 "  dev:",
                 "    draws: 60",
                 "    tune: 80",
@@ -974,12 +1067,13 @@ def test_bayesian_profile_metadata_fields_present_and_consistent(tmp_path, monke
 
     profile_usage_run = run_meta.get("bayesian_profile_usage", {})
     profile_usage_risk = risk_meta.get("bayesian_profile_usage", {})
-    assert profile_usage_run.get("fullfit_profile_name") == "final"
-    assert profile_usage_run.get("oof_profile_name") == "cv"
-    assert profile_usage_run.get("cv_profile_differs_from_final") is True
-    assert "draws" in profile_usage_run.get("cv_vs_final_diff_keys", [])
-    assert profile_usage_risk.get("fullfit_profile_name") == "final"
-    assert profile_usage_risk.get("oof_profile_name") == "cv"
+    assert profile_usage_run.get("profiles_enabled") is False
+    assert profile_usage_run.get("fullfit_profile_name") == "base"
+    assert profile_usage_run.get("oof_profile_name") == "base"
+    assert profile_usage_run.get("cv_profile_differs_from_final") is False
+    assert profile_usage_risk.get("profiles_enabled") is False
+    assert profile_usage_risk.get("fullfit_profile_name") == "base"
+    assert profile_usage_risk.get("oof_profile_name") == "base"
     assert "warning_flags" in profile_usage_run
     assert "cv_subset_mode_active" in run_meta.get("bayesian_profile_usage", {})
     assert "cv_subset_mode_active" in risk_meta
@@ -1273,6 +1367,18 @@ def test_bayesian_headline_suppressed_when_convergence_false(tmp_path, monkeypat
         },
     )
     monkeypatch.setattr(
+        "src.pipeline_runtime.phases_bayesian.summarize_diagnostics_by_group",
+        lambda *args, **kwargs: pd.DataFrame(
+            columns=[
+                "group",
+                "n_parameters",
+                "fail_rhat_count",
+                "fail_ess_count",
+                "ess_min",
+            ]
+        ),
+    )
+    monkeypatch.setattr(
         "run_pipeline.extract_rhat_ess",
         lambda _idata: pd.DataFrame({"parameter": ["x"], "r_hat": [1.2], "ess_bulk": [20.0]}),
     )
@@ -1294,6 +1400,10 @@ def test_bayesian_headline_suppressed_when_convergence_false(tmp_path, monkeypat
     assert any(reason.get("code") == "bayesian_convergence_failed" for reason in degraded.get("reasons", []))
     assert risk_meta["headline_eligible"] is False
     assert risk_meta["converged"] is False
+    assert risk_meta["global_converged"] is False
+    assert risk_meta["strict_converged"] is False
+    assert risk_meta["effective_converged"] is False
+    assert risk_meta["full_fit_retrospective_only"] is True
 
 
 def test_bayesian_convergence_warn_mode_prevents_strict_crash(tmp_path, monkeypatch) -> None:

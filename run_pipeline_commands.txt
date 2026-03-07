@@ -17,6 +17,7 @@ PYTHONPATH=. pytest -q tests/test_pipeline_smoke.py -k "baseline_phase_cleans_st
 PYTHONPATH=. pytest -q tests/test_metrics_integrity.py
 
 # 2) Main run (thesis-style window) using refreshed top300 data.
+#    Uses unified base bayesian_model settings from config/model_config.yaml.
 #    Note: stale baseline fold artifacts under outputs/models/baselines are now auto-cleaned at baseline run start.
 python run_pipeline.py \
   --adapter-config projects/brazil_chik/config.yaml \
@@ -24,6 +25,18 @@ python run_pipeline.py \
   --start-year 2015 \
   --end-year 2025 \
   --bayesian-progress \
+  --no-strict-feature-gate \
+  --log-level INFO \
+  2>&1 | tee logs.txt
+
+# Optional dev-profile run (explicit opt-in):
+python run_pipeline.py \
+  --adapter-config projects/brazil_chik/config.yaml \
+  --raw-data data/processed/brazil_chik_dataset_top300_final.csv \
+  --start-year 2015 \
+  --end-year 2025 \
+  --enable-bayesian-profiles \
+  --bayesian-profile-mode dev \
   --no-strict-feature-gate \
   --log-level INFO \
   2>&1 | tee logs.txt
@@ -46,6 +59,13 @@ print('decision_rows=', len(decision))
 print('threshold_cases_non_null=', threshold_non_null)
 print('missing_bayesian_classification_metrics=', missing_bayesian_metrics)
 PY
+
+# 4) Standalone visualization phase from persisted payload artifacts.
+python scripts/run_visualization_phase.py \
+  --payload-csv outputs/reports/visualization_payload.csv \
+  --payload-metadata outputs/reports/visualization_payload_metadata.json \
+  --output-dir outputs/figures \
+  --log-level INFO
 
 # tmux Quick Reference (keep this section for long runs)
 

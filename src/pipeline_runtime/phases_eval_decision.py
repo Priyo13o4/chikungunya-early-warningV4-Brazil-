@@ -13,11 +13,12 @@ from src.pipeline_runtime.io_artifacts import build_contract_track_comparison_pl
 from src.pipeline_runtime.phase_context import EvalDecisionPhaseResult, SharedPhaseState
 
 LOGGER = logging.getLogger(__name__)
+_THRESHOLD_GRID_MIN_FLOOR = 0.05
 
 
 def _build_threshold_grid(*, grid_size: int, grid_min: float, grid_max: float) -> list[float]:
-    clipped_min = float(min(max(grid_min, 0.0), 1.0))
-    clipped_max = float(min(max(grid_max, 0.0), 1.0))
+    clipped_min = float(min(max(grid_min, _THRESHOLD_GRID_MIN_FLOOR), 1.0))
+    clipped_max = float(min(max(grid_max, _THRESHOLD_GRID_MIN_FLOOR), 1.0))
     if clipped_max < clipped_min:
         clipped_min, clipped_max = clipped_max, clipped_min
     safe_grid_size = max(int(grid_size), 2)
@@ -40,6 +41,9 @@ def _optimize_balanced_bayesian_threshold(
     y_valid = y.loc[valid].astype(int)
     probs_valid = probs.loc[valid].astype(float).clip(0.0, 1.0)
     sample_size = int(len(y_valid))
+    configured_min = float(grid_min)
+    effective_min = float(min(max(configured_min, _THRESHOLD_GRID_MIN_FLOOR), 1.0))
+    clamp_applied = bool(not np.isclose(configured_min, effective_min))
 
     payload: dict[str, Any] = {
         "threshold": float(min(max(fallback_threshold, 0.0), 1.0)),
@@ -50,6 +54,10 @@ def _optimize_balanced_bayesian_threshold(
         "method": "fallback_balanced_threshold",
         "objective_primary": "f1",
         "objective_tiebreaker": "accuracy",
+        "configured_min": configured_min,
+        "effective_min": effective_min,
+        "clamp_applied": clamp_applied,
+        "clamp_policy": "threshold_grid_min_floor",
     }
     if sample_size < int(min_samples) or y_valid.nunique(dropna=True) < 2:
         return payload
@@ -80,14 +88,13 @@ def _optimize_balanced_bayesian_threshold(
             best_threshold = float(threshold)
 
     return {
+        **payload,
         "threshold": float(best_threshold),
         "f1": float(best_f1),
         "accuracy": float(best_accuracy),
         "sample_size": sample_size,
         "optimized": True,
         "method": "empirical_balanced_oof",
-        "objective_primary": "f1",
-        "objective_tiebreaker": "accuracy",
     }
 
 
@@ -382,6 +389,7 @@ def run_evaluation_and_decision_phase(
     threshold_cases_series = pd.to_numeric(threshold_cases_series, errors="coerce")
     threshold_cases_clamp_mask = threshold_cases_series.notna() & (threshold_cases_series <= 0.0)
     threshold_cases_clamp_count = int(threshold_cases_clamp_mask.sum())
+    threshold_cases_clamp_ratio = float(threshold_cases_clamp_count / len(threshold_cases_series)) if len(threshold_cases_series) else 0.0
     if threshold_cases_clamp_count > 0:
         threshold_cases_series.loc[threshold_cases_clamp_mask] = 1.0
         LOGGER.warning(
@@ -464,6 +472,26 @@ def run_evaluation_and_decision_phase(
             "headline_eligible": bool(bayesian_headline_effective),
             "degraded": bool(state.degraded_reasons),
             "converged": None if bayesian_converged is None else bool(bayesian_converged),
+            "global_converged": (
+                bool(bayesian_convergence_payload.get("global_converged"))
+                if bayesian_convergence_payload is not None and bayesian_convergence_payload.get("global_converged") is not None
+                else None
+            ),
+            "strict_converged": (
+                bool(bayesian_convergence_payload.get("strict_converged"))
+                if bayesian_convergence_payload is not None and bayesian_convergence_payload.get("strict_converged") is not None
+                else None
+            ),
+            "effective_converged": (
+                bool(bayesian_convergence_payload.get("effective_converged"))
+                if bayesian_convergence_payload is not None and bayesian_convergence_payload.get("effective_converged") is not None
+                else None
+            ),
+            "convergence_mode_used": (
+                bayesian_convergence_payload.get("convergence_mode_used")
+                if bayesian_convergence_payload is not None
+                else None
+            ),
             "convergence_checked": bool(bayesian_convergence_payload is not None),
             "mode_used": str(bayesian_sampling_diagnostics.get("mode_used", "not_run")),
             "fallback_used": bool(bayesian_sampling_diagnostics.get("fallback_used", False)),
@@ -493,6 +521,12 @@ def run_evaluation_and_decision_phase(
             "climate_covariates": list(covariates_effective),
             "covariates_requested": list(covariates_requested),
             "covariates_effective": list(covariates_effective),
+            "trained_covariate_order": list(
+                bayesian_sampling_diagnostics.get("trained_covariate_order", covariates_effective)
+            ),
+            "trained_covariate_order_locked": bool(
+                bayesian_sampling_diagnostics.get("trained_covariate_order_locked", False)
+            ),
             "covariate_selection": covariate_selection_payload,
             "compute_backend_requested": str(bayesian_sampling_diagnostics.get("compute_backend_requested", "cpu")),
             "compute_backend_effective": str(bayesian_sampling_diagnostics.get("compute_backend_effective", "cpu")),
@@ -502,6 +536,14 @@ def run_evaluation_and_decision_phase(
             ),
             "compute_backend_fallback_reason": bayesian_sampling_diagnostics.get("compute_backend_fallback_reason"),
             "threshold_basis": str(bayesian_sampling_diagnostics.get("threshold_basis", "default")),
+            "label_uses_future_shift": bool(bayesian_sampling_diagnostics.get("label_uses_future_shift", True)),
+            "full_fit_retrospective_only": bool(
+                bayesian_sampling_diagnostics.get("full_fit_retrospective_only", True)
+            ),
+            "prospective_claim_allowed": bool(
+                bayesian_sampling_diagnostics.get("prospective_claim_allowed", False)
+            ),
+            "training_mode": str(bayesian_sampling_diagnostics.get("training_mode", "unknown")),
             "decision_threshold_optimization": {
                 "enabled": bool(decision_optimize_threshold),
                 "risk_basis": decision_optimization_risk_basis,
@@ -521,11 +563,21 @@ def run_evaluation_and_decision_phase(
                 "objective_primary": str(balanced_threshold_payload.get("objective_primary", "f1")),
                 "objective_tiebreaker": str(balanced_threshold_payload.get("objective_tiebreaker", "accuracy")),
                 "grid_size": int(max(int(decision_optimization_grid_size), 2)),
-                "grid_min": float(min(max(float(decision_optimization_grid_min), 0.0), 1.0)),
-                "grid_max": float(min(max(float(decision_optimization_grid_max), 0.0), 1.0)),
+                "grid_min": float(min(max(float(decision_optimization_grid_min), _THRESHOLD_GRID_MIN_FLOOR), 1.0)),
+                "grid_max": float(min(max(float(decision_optimization_grid_max), _THRESHOLD_GRID_MIN_FLOOR), 1.0)),
+                "configured_min": float(balanced_threshold_payload.get("configured_min", decision_optimization_grid_min)),
+                "effective_min": float(balanced_threshold_payload.get("effective_min", decision_optimization_grid_min)),
+                "clamp_applied": bool(balanced_threshold_payload.get("clamp_applied", False)),
+                "clamp_policy": str(balanced_threshold_payload.get("clamp_policy", "threshold_grid_min_floor")),
             },
             "threshold_cases_clamp_count": int(threshold_cases_clamp_count),
             "threshold_cases_clamp_applied": bool(threshold_cases_clamp_count > 0),
+            "threshold_cases_clamp_ratio": float(threshold_cases_clamp_ratio),
+            "threshold_cases_clamp_reason": (
+                "non_positive_threshold_cases_corrected_to_one"
+                if threshold_cases_clamp_count > 0
+                else None
+            ),
             "bayesian_profile_usage": bayesian_sampling_diagnostics.get("bayesian_profile_usage", bayesian_profile_usage),
             "cv_subset_mode_active": bool(
                 bayesian_sampling_diagnostics.get("cv_subset_mode_active", cv_subset_mode_active)
