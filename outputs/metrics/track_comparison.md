@@ -1,0 +1,22 @@
+| metric                         |   baseline |        bayesian |        delta |   relative_delta_pct |
+|:-------------------------------|-----------:|----------------:|-------------:|---------------------:|
+| accuracy                       |   0.430915 |     0.675227    |   0.244312   |            56.6961   |
+| balanced_threshold_accuracy    | nan        |     0.383394    | nan          |           nan        |
+| balanced_threshold_f1          | nan        |     0.435619    | nan          |           nan        |
+| balanced_threshold_kappa       | nan        |     0.0356102   | nan          |           nan        |
+| balanced_threshold_optimized   | nan        |     1           | nan          |           nan        |
+| balanced_threshold_precision   | nan        |     0.292241    | nan          |           nan        |
+| balanced_threshold_recall      | nan        |     0.855188    | nan          |           nan        |
+| balanced_threshold_sample_size | nan        | 30723           | nan          |           nan        |
+| balanced_threshold_used        | nan        |     0.1545      | nan          |           nan        |
+| brier                          | nan        |     0.214716    | nan          |           nan        |
+| f1                             |   0.491153 |     0.433671    |  -0.0574819  |           -11.7035   |
+| false_alarm_rate               |   0.783485 |     0.129566    |  -0.653919   |           -83.4628   |
+| kappa                          |   0.125609 |     0.000997917 |  -0.124611   |           -99.2055   |
+| lead_time_mean                 |   1.06146  |     0.396856    |  -0.664602   |           -62.6122   |
+| lead_time_utility              |   1.04335  |     0.330634    |  -0.71272    |           -68.3105   |
+| pr_auc                         |   0.793761 |     0.320982    |  -0.472779   |           -59.5619   |
+| precision                      |   0.326915 |     0.278624    |  -0.0482908  |           -14.7717   |
+| recall                         |   0.987016 |     0.977775    |  -0.00924085 |            -0.936241 |
+| roc_auc                        |   0.890239 |     0.562735    |  -0.327504   |           -36.7883   |
+| threshold_used                 | nan        |     0.05        | nan          |           nan        |
