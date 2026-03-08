@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.threshold_resolution import resolve_threshold_series
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -227,36 +229,12 @@ class HierarchicalBayesianModel:
         frame: pd.DataFrame,
         outbreak_threshold: pd.Series | None,
     ) -> tuple[np.ndarray, dict[str, Any]]:
-        if outbreak_threshold is not None:
-            threshold_series = pd.to_numeric(pd.Series(outbreak_threshold, index=frame.index), errors="coerce")
-            threshold_series = threshold_series.fillna(float(self.config.outbreak_threshold_default_cases))
-            return threshold_series.to_numpy(dtype=float), {
-                "threshold_basis": "provided_series",
-                "threshold_default": float(self.config.outbreak_threshold_default_cases),
-                "threshold_column": None,
-            }
-
-        threshold_candidates = [
-            column
-            for column in frame.columns
-            if isinstance(column, str) and (column.startswith("threshold_p") or column == "outbreak_threshold")
-        ]
-        if threshold_candidates:
-            selected_column = sorted(threshold_candidates)[0]
-            threshold_series = pd.to_numeric(frame[selected_column], errors="coerce").fillna(
-                float(self.config.outbreak_threshold_default_cases)
-            )
-            return threshold_series.to_numpy(dtype=float), {
-                "threshold_basis": f"column:{selected_column}",
-                "threshold_default": float(self.config.outbreak_threshold_default_cases),
-                "threshold_column": selected_column,
-            }
-
-        return np.full(len(frame), float(self.config.outbreak_threshold_default_cases), dtype=float), {
-            "threshold_basis": "default",
-            "threshold_default": float(self.config.outbreak_threshold_default_cases),
-            "threshold_column": None,
-        }
+        threshold_series, threshold_meta = resolve_threshold_series(
+            frame=frame,
+            default_threshold=float(self.config.outbreak_threshold_default_cases),
+            outbreak_threshold=outbreak_threshold,
+        )
+        return threshold_series.to_numpy(dtype=float), threshold_meta
 
     def _compute_linear_components(self, frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         district_values = frame[self.config.district_column].astype(str)
@@ -1129,6 +1107,7 @@ class HierarchicalBayesianModel:
         }
 
         diagnostics_summary = self._extract_sampler_diagnostics(idata)
+        arviz_diagnostics_status = "ok"
         try:
             from src.models.bayesian.diagnostics import summarize_diagnostics
 
@@ -1136,7 +1115,24 @@ class HierarchicalBayesianModel:
             diagnostics_summary["r_hat_max"] = float(convergence.get("r_hat_max", float("nan")))
             diagnostics_summary["ess_min"] = float(convergence.get("ess_min", float("nan")))
         except Exception as diagnostics_error:
+            arviz_diagnostics_status = "unavailable"
             LOGGER.warning("Unable to compute R-hat/ESS diagnostics from ArviZ: %s", diagnostics_error)
+
+        rhat_value = pd.to_numeric(pd.Series([diagnostics_summary.get("r_hat_max")]), errors="coerce").iloc[0]
+        ess_value = pd.to_numeric(pd.Series([diagnostics_summary.get("ess_min")]), errors="coerce").iloc[0]
+        diagnostics_nan = bool(pd.isna(rhat_value) or pd.isna(ess_value))
+        if diagnostics_nan:
+            if arviz_diagnostics_status != "unavailable":
+                arviz_diagnostics_status = "nan_after_fit"
+            LOGGER.warning(
+                "Bayesian post-fit diagnostics contain NaN values: r_hat_max=%s ess_min=%s",
+                diagnostics_summary.get("r_hat_max"),
+                diagnostics_summary.get("ess_min"),
+            )
+
+        self.sampling_diagnostics_["arviz_diagnostics_status"] = str(arviz_diagnostics_status)
+        self.sampling_diagnostics_["arviz_diagnostics_available"] = bool(arviz_diagnostics_status == "ok")
+        self.sampling_diagnostics_["arviz_diagnostics_nan"] = bool(diagnostics_nan)
 
         diagnostics_summary["simplified_mode"] = 1.0 if simplified_mode else 0.0
         diagnostics_summary["fallback"] = 0.0
@@ -1150,6 +1146,16 @@ class HierarchicalBayesianModel:
             z_state_values=z_state_values,
             simplified_mode=simplified_mode,
             diagnostics_summary=diagnostics_summary,
+        )
+
+        LOGGER.info(
+            "Bayesian fit diagnostics: backend=%s, simplified_mode=%s, divergences=%.0f, max_tree_depth=%.0f, r_hat_max=%.4f, ess_min=%.1f",
+            self.sampling_backend_effective_,
+            bool(simplified_mode),
+            diagnostics_summary.get("divergences", float("nan")),
+            diagnostics_summary.get("max_tree_depth", float("nan")),
+            diagnostics_summary.get("r_hat_max", float("nan")),
+            diagnostics_summary.get("ess_min", float("nan")),
         )
 
         if self._needs_simplification(diagnostics_summary):

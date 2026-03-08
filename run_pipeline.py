@@ -510,10 +510,12 @@ def _collect_bayesian_oof_scores(
     target_column: str = "outbreak_label",
     generate_time_splits_fn: Callable[[pd.DataFrame, TimeSeriesCVConfig], Any] = generate_time_splits,
     compute_backend_effective: str = "cpu",
-) -> pd.Series:
+    return_fold_diagnostics: bool = False,
+) -> pd.Series | tuple[pd.Series, dict[str, Any]]:
     from src.models.bayesian.hierarchical_model import HierarchicalBayesianModel
 
     oof = pd.Series(np.nan, index=features_df.index, dtype="float64")
+    fold_diagnostics: list[dict[str, Any]] = []
 
     cv_effective = cv_config
     if not str(cv_effective.date_column).strip() or not str(cv_effective.target_column).strip():
@@ -528,7 +530,7 @@ def _collect_bayesian_oof_scores(
     cv_frame[cv_effective.target_column] = pd.to_numeric(outbreak_target, errors="coerce").fillna(0).astype(int)
     requested_covariates = list(runtime_config.resolve_bayesian_climate_covariates(bayesian_settings=bayesian_settings))
 
-    for train_idx, valid_idx in generate_time_splits_fn(cv_frame, cv_effective):
+    for fold_number, (train_idx, valid_idx) in enumerate(generate_time_splits_fn(cv_frame, cv_effective), start=1):
         y_train_binary = pd.to_numeric(outbreak_target.loc[train_idx], errors="coerce").fillna(0).astype(int)
         y_train_counts = pd.to_numeric(count_target.loc[train_idx], errors="coerce").fillna(0.0)
         if y_train_binary.nunique(dropna=True) <= 1:
@@ -574,6 +576,13 @@ def _collect_bayesian_oof_scores(
                 outbreak_threshold=fold_threshold,
             )[0]["risk_mean"].clip(0.0, 1.0)
             oof.loc[valid_idx] = fold_pred.astype(float)
+            fold_diagnostics.append(
+                {
+                    "fold_number": int(fold_number),
+                    "n_train": int(len(train_idx)),
+                    "n_valid": int(len(valid_idx)),
+                }
+            )
         except Exception as fold_error:
             fold_error_message = str(fold_error).strip().lower()
             hard_fail_violation = any(marker in fold_error_message for marker in _BAYESIAN_OOF_HARD_FAIL_MARKERS)
@@ -585,7 +594,21 @@ def _collect_bayesian_oof_scores(
                 raise RuntimeError(f"Bayesian OOF fold failed under strict/full mode: {fold_error}") from fold_error
             LOGGER.warning("Bayesian OOF fold skipped due to error: %s", fold_error)
 
-    return oof
+    if not return_fold_diagnostics:
+        return oof
+
+    diagnostics = {
+        "fold_count": int(len(fold_diagnostics)),
+        "folds": fold_diagnostics,
+        "ess_min_sequence": [],
+        "rhat_max_sequence": [],
+        "ess_first": None,
+        "ess_last": None,
+        "ess_improved": False,
+        "ess_threshold": float(bayesian_settings.get("ess_warn_threshold", 200.0)),
+        "any_nan": False,
+    }
+    return oof, diagnostics
 
 
 def _cleanup_nonessential_metric_csvs(metrics_dir: Path) -> None:

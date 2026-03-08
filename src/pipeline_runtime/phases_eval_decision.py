@@ -11,6 +11,7 @@ from sklearn.metrics import accuracy_score, cohen_kappa_score, f1_score, precisi
 from src.evaluation.metrics_baselines import evaluate_baseline_predictions
 from src.pipeline_runtime.io_artifacts import build_contract_track_comparison_placeholder, write_bayesian_convergence_summary
 from src.pipeline_runtime.phase_context import EvalDecisionPhaseResult, SharedPhaseState
+from src.threshold_resolution import parse_threshold_percentile, resolve_threshold_series
 
 LOGGER = logging.getLogger(__name__)
 _THRESHOLD_GRID_MIN_FLOOR = 0.05
@@ -140,7 +141,7 @@ def run_evaluation_and_decision_phase(
     bayesian_covariates_effective: list[str] | None = None,
     bayesian_covariate_selection: dict[str, Any] | None = None,
 ) -> EvalDecisionPhaseResult:
-    suppress_headline_comparison = bool(state.degraded_reasons)
+    suppress_headline_comparison = False
     covariates_requested_for_payload = list(
         bayesian_covariates_requested
         if bayesian_covariates_requested is not None
@@ -169,20 +170,7 @@ def run_evaluation_and_decision_phase(
             "viable_count": int(len(covariates_effective_for_payload)),
             "requested_count": int(len(covariates_requested_for_payload)),
         }
-    degraded_run_payload = {
-        "run_id": run_id,
-        "degraded": bool(state.degraded_reasons),
-        "suppress_headline_comparison": suppress_headline_comparison,
-        "reasons": state.degraded_reasons,
-        "baseline_headline_eligible": bool(baseline_headline_eligible),
-        "bayesian_headline_eligible": bool(bayesian_headline_eligible),
-        "bayesian_covariates_requested": list(covariates_requested_for_payload),
-        "bayesian_covariates_effective": list(covariates_effective_for_payload),
-        "bayesian_covariate_selection": covariate_selection_for_payload,
-    }
-    degraded_run_path = paths.outputs_reports / "degraded_run.json"
-    safe_write_json_fn(degraded_run_payload, degraded_run_path)
-    state.artifacts["degraded_run"] = degraded_run_path
+    degraded_run_payload: dict[str, Any] = {}
 
     LOGGER.info("Phase: decision layer")
     fallback_decision_threshold = min(
@@ -331,6 +319,7 @@ def run_evaluation_and_decision_phase(
             state.artifacts["baseline_metrics"] = paths.outputs_metrics / "baseline_metrics.json"
 
     LOGGER.info("Phase: evaluation")
+    suppress_headline_comparison = bool(state.degraded_reasons)
     comparison_table = None
     if baseline_headline_eligible and bayesian_headline_eligible and not suppress_headline_comparison:
         comparison_outputs = export_track_comparison_fn(
@@ -354,6 +343,21 @@ def run_evaluation_and_decision_phase(
     else:
         LOGGER.info("Track comparison skipped because one or both tracks are unavailable or run is degraded")
 
+    degraded_run_payload = {
+        "run_id": run_id,
+        "degraded": bool(state.degraded_reasons),
+        "suppress_headline_comparison": bool(suppress_headline_comparison),
+        "reasons": state.degraded_reasons,
+        "baseline_headline_eligible": bool(baseline_headline_eligible),
+        "bayesian_headline_eligible": bool(bayesian_headline_eligible),
+        "bayesian_covariates_requested": list(covariates_requested_for_payload),
+        "bayesian_covariates_effective": list(covariates_effective_for_payload),
+        "bayesian_covariate_selection": covariate_selection_for_payload,
+    }
+    degraded_run_path = paths.outputs_reports / "degraded_run.json"
+    safe_write_json_fn(degraded_run_payload, degraded_run_path)
+    state.artifacts["degraded_run"] = degraded_run_path
+
     if "track_comparison_csv" not in state.artifacts or "track_comparison_md" not in state.artifacts:
         track_reason = "degraded_run_or_missing_track_metrics"
         placeholder_frame, placeholder_markdown = build_contract_track_comparison_placeholder(
@@ -367,25 +371,29 @@ def run_evaluation_and_decision_phase(
         state.artifacts["track_comparison_csv"] = track_csv_path
         state.artifacts["track_comparison_md"] = track_md_path
 
-    threshold_cases_series = pd.Series(np.nan, index=labeled_df.index, dtype="float64")
-    if "outbreak_threshold" in labeled_df.columns:
-        threshold_cases_series = pd.to_numeric(labeled_df["outbreak_threshold"], errors="coerce")
-    else:
-        threshold_columns = sorted(
-            [
-                column
-                for column in labeled_df.columns
-                if isinstance(column, str) and column.startswith("threshold_p")
-            ]
-        )
-        if threshold_columns:
-            threshold_cases_series = pd.to_numeric(labeled_df[threshold_columns[-1]], errors="coerce")
+    preferred_threshold_column = bayesian_sampling_diagnostics.get("threshold_column")
+    if not isinstance(preferred_threshold_column, str) or not preferred_threshold_column:
+        preferred_threshold_column = None
+
+    preferred_percentile = None
+    if preferred_threshold_column is not None:
+        preferred_percentile = parse_threshold_percentile(preferred_threshold_column)
+    if preferred_percentile is None:
+        threshold_basis = str(bayesian_sampling_diagnostics.get("threshold_basis", ""))
+        if threshold_basis.startswith("column:"):
+            preferred_percentile = parse_threshold_percentile(threshold_basis.split(":", 1)[1])
+
     threshold_default = pd.to_numeric(
         pd.Series([bayesian_sampling_diagnostics.get("threshold_default", np.nan)]),
         errors="coerce",
     ).iloc[0]
-    if pd.notna(threshold_default):
-        threshold_cases_series = threshold_cases_series.fillna(float(threshold_default))
+    threshold_default_value = float(threshold_default) if pd.notna(threshold_default) else float("nan")
+    threshold_cases_series, _ = resolve_threshold_series(
+        frame=labeled_df,
+        default_threshold=threshold_default_value,
+        preferred_threshold_column=preferred_threshold_column,
+        preferred_percentile=preferred_percentile,
+    )
     threshold_cases_series = pd.to_numeric(threshold_cases_series, errors="coerce")
     threshold_cases_clamp_mask = threshold_cases_series.notna() & (threshold_cases_series <= 0.0)
     threshold_cases_clamp_count = int(threshold_cases_clamp_mask.sum())

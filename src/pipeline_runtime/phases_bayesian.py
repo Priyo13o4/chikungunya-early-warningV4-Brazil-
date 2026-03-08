@@ -21,12 +21,6 @@ from src.pipeline_runtime.phase_context import BayesianPhaseResult, SharedPhaseS
 
 LOGGER = logging.getLogger(__name__)
 
-_BAYESIAN_OOF_HARD_FAIL_MARKERS: tuple[str, ...] = (
-    "cv statistical gate failure",
-    "statistical_gate_failed",
-    "missing required climate covariates",
-    "pipeline must provide the configured bayesian covariate set explicitly",
-)
 _SUPPORTED_OOF_EXECUTION_MODES: set[str] = {"legacy", "simplified", "conditional"}
 _CLIMATE_COLUMN_TOKENS: tuple[str, ...] = ("rain", "temp", "humid", "precip", "climate", "lai")
 
@@ -887,6 +881,7 @@ def collect_bayesian_oof_scores(
         if return_fold_diagnostics:
             diagnostics = {
                 "fold_count": 0,
+                "folds": [],
                 "ess_min_sequence": [],
                 "rhat_max_sequence": [],
                 "ess_first": None,
@@ -929,6 +924,7 @@ def collect_bayesian_oof_scores(
         if return_fold_diagnostics:
             diagnostics = {
                 "fold_count": 0,
+                "folds": [],
                 "ess_min_sequence": [],
                 "rhat_max_sequence": [],
                 "ess_first": None,
@@ -1019,6 +1015,7 @@ def collect_bayesian_oof_scores(
             fold_divergences = pd.to_numeric(pd.Series([fold_diag.get("divergences")]), errors="coerce").iloc[0]
             fold_diagnostics.append(
                 {
+                    "fold_number": int(fold_number),
                     "fold_ess_min": float(fold_ess_min) if not pd.isna(fold_ess_min) else float("nan"),
                     "fold_rhat_max": float(fold_rhat_max) if not pd.isna(fold_rhat_max) else float("nan"),
                     "fold_divergences": float(fold_divergences) if not pd.isna(fold_divergences) else float("nan"),
@@ -1051,13 +1048,11 @@ def collect_bayesian_oof_scores(
             )[0]["risk_mean"].clip(0.0, 1.0)
             oof.loc[valid_idx] = fold_pred.astype(float)
         except Exception as fold_error:
-            fold_error_message = str(fold_error).strip().lower()
-            hard_fail_violation = any(marker in fold_error_message for marker in _BAYESIAN_OOF_HARD_FAIL_MARKERS)
             LOGGER.warning(
-                "Bayesian OOF fold skipped and training continues (hard_fail_violation=%s, fail_on_error=%s): %s",
-                bool(hard_fail_violation),
-                bool(fail_on_error),
+                "Bayesian OOF fold failed gracefully; continuing | fold_number=%d error=%s fail_on_error=%s",
+                int(fold_number),
                 fold_error,
+                bool(fail_on_error),
             )
 
     if not return_fold_diagnostics:
@@ -1082,6 +1077,7 @@ def collect_bayesian_oof_scores(
     )
     diagnostics = {
         "fold_count": int(len(fold_diagnostics)),
+        "folds": fold_diagnostics,
         "ess_min_sequence": ess_sequence,
         "rhat_max_sequence": rhat_sequence,
         "ess_first": ess_first,
@@ -1390,6 +1386,15 @@ def run_bayesian_phase(
                     )
                     requested_oof_mode = "conditional"
 
+                configured_selected_percentile_raw = bayesian_settings_cv.get(
+                    "selected_percentile",
+                    bayesian_settings_fullfit.get("selected_percentile", 75),
+                )
+                try:
+                    configured_selected_percentile = int(configured_selected_percentile_raw)
+                except (TypeError, ValueError):
+                    configured_selected_percentile = 75
+
                 effective_simplified = bool(bayesian_settings_cv.get("bayesian_simplified_mode", False)) if requested_oof_mode == "legacy" else False
                 oof_simplified_reason: str | None = None
 
@@ -1440,11 +1445,13 @@ def run_bayesian_phase(
                 if supports_temporal_series:
                     base_oof_kwargs["temporal_series"] = temporal_index.loc[subset_index] if temporal_index is not None else None
                 if supports_selected_percentile:
-                    base_oof_kwargs["selected_percentile"] = 75
+                    base_oof_kwargs["selected_percentile"] = int(configured_selected_percentile)
                 if supports_fold_local_labeling:
                     base_oof_kwargs["apply_fold_local_labeling"] = True
                 if supports_fold_local_imputation:
                     base_oof_kwargs["apply_fold_local_climate_imputation"] = True
+                if supports_fold_diagnostics:
+                    base_oof_kwargs["return_fold_diagnostics"] = True
 
                 LOGGER.info(
                     "Bayesian OOF start: requested_mode=%s pass1_mode=%s rerun_if_no_ess_improvement=%s convergence_mode=%s sampler(draws=%d,tune=%d,chains=%d,target_accept=%.3f,max_treedepth=%d,retries=%d,simplified=%s) backend=%s",
@@ -1465,55 +1472,27 @@ def run_bayesian_phase(
                 bayesian_oof_subset: pd.Series
                 oof_fold_diagnostics: dict[str, Any] = {}
                 oof_rerun_simplified = False
+                try:
+                    oof_result = collect_bayesian_oof_scores_fn(**base_oof_kwargs)
+                except Exception as oof_error:
+                    LOGGER.warning("Bayesian OOF run failed; continuing with empty OOF: %s", oof_error)
+                    oof_result = (pd.Series(dtype="float64"), {}) if supports_fold_diagnostics else pd.Series(dtype="float64")
+
+                if isinstance(oof_result, tuple) and len(oof_result) == 2:
+                    bayesian_oof_subset = oof_result[0]
+                    oof_fold_diagnostics = dict(oof_result[1] or {})
+                else:
+                    bayesian_oof_subset = oof_result
+                    oof_fold_diagnostics = {}
+
+                effective_oof_mode = requested_oof_mode
                 if requested_oof_mode == "conditional":
-                    bayesian_settings_cv["bayesian_simplified_mode"] = False
-                    bayesian_settings_cv["max_convergence_retries"] = 1
-                    conditional_pass1_kwargs = dict(base_oof_kwargs)
-                    if supports_fold_diagnostics:
-                        conditional_pass1_kwargs["return_fold_diagnostics"] = True
-                    try:
-                        pass1_result = collect_bayesian_oof_scores_fn(**conditional_pass1_kwargs)
-                    except Exception as oof_error:
-                        LOGGER.warning("Bayesian OOF conditional pass-1 failed; continuing with empty OOF: %s", oof_error)
-                        pass1_result = (pd.Series(dtype="float64"), {})
-                    if isinstance(pass1_result, tuple) and len(pass1_result) == 2:
-                        bayesian_oof_subset = pass1_result[0]
-                        oof_fold_diagnostics = dict(pass1_result[1] or {})
-                    else:
-                        bayesian_oof_subset = pass1_result
-                        oof_fold_diagnostics = {}
-
-                    ess_improved = bool(oof_fold_diagnostics.get("ess_improved", False))
-                    if not ess_improved:
-                        bayesian_settings_cv["bayesian_simplified_mode"] = True
-                        bayesian_settings_cv["max_convergence_retries"] = 0
-                        rerun_kwargs = dict(base_oof_kwargs)
-                        if supports_fold_diagnostics:
-                            rerun_kwargs["return_fold_diagnostics"] = False
-                        try:
-                            bayesian_oof_subset = collect_bayesian_oof_scores_fn(**rerun_kwargs)
-                        except Exception as oof_error:
-                            LOGGER.warning("Bayesian OOF conditional rerun failed; continuing with empty OOF: %s", oof_error)
-                            bayesian_oof_subset = pd.Series(dtype="float64")
-                        effective_oof_mode = "simplified"
-                        oof_rerun_simplified = True
-                        oof_simplified_reason = "conditional_oof_no_ess_improvement"
-                    else:
-                        effective_oof_mode = "conditional"
-
                     LOGGER.info(
-                        "Bayesian OOF conditional outcome: ess_first=%s ess_last=%s ess_improved=%s rerun_simplified=%s",
+                        "Bayesian OOF conditional mode executed once in full-latent configuration (no auto-rerun): ess_first=%s ess_last=%s ess_improved=%s",
                         oof_fold_diagnostics.get("ess_first"),
                         oof_fold_diagnostics.get("ess_last"),
                         bool(oof_fold_diagnostics.get("ess_improved", False)),
-                        bool(oof_rerun_simplified),
                     )
-                else:
-                    try:
-                        bayesian_oof_subset = collect_bayesian_oof_scores_fn(**base_oof_kwargs)
-                    except Exception as oof_error:
-                        LOGGER.warning("Bayesian OOF run failed; continuing with empty OOF: %s", oof_error)
-                        bayesian_oof_subset = pd.Series(dtype="float64")
 
                 bayesian_sampling_diagnostics["oof_execution_mode_effective"] = effective_oof_mode
                 bayesian_sampling_diagnostics["oof_simplified_reason"] = oof_simplified_reason
@@ -1522,10 +1501,48 @@ def run_bayesian_phase(
                 bayesian_sampling_diagnostics["oof_fold_ess_improved"] = oof_fold_diagnostics.get("ess_improved")
                 bayesian_sampling_diagnostics["oof_rerun_simplified"] = bool(oof_rerun_simplified)
 
+                bayesian_oof_diagnostics_payload: dict[str, Any] = {
+                    "run_id": state.run_id,
+                    "oof_execution_mode_requested": str(requested_oof_mode),
+                    "oof_execution_mode_effective": str(effective_oof_mode),
+                    "oof_rerun_simplified": bool(oof_rerun_simplified),
+                    "selected_percentile": int(configured_selected_percentile),
+                    "minimum_evaluated_folds": int(effective_cv_config.minimum_evaluated_folds),
+                    "fold_count_known": bool(oof_fold_diagnostics.get("fold_count") is not None),
+                    "fold_count": int(oof_fold_diagnostics.get("fold_count", 0) or 0),
+                    "ess_first": oof_fold_diagnostics.get("ess_first"),
+                    "ess_last": oof_fold_diagnostics.get("ess_last"),
+                    "ess_improved": oof_fold_diagnostics.get("ess_improved"),
+                    "ess_threshold": oof_fold_diagnostics.get("ess_threshold"),
+                    "any_nan": bool(oof_fold_diagnostics.get("any_nan", False)),
+                    "folds": list(oof_fold_diagnostics.get("folds", [])),
+                }
+                oof_diagnostics_path = paths.outputs_metrics / "bayesian_oof_diagnostics.json"
+                safe_write_json_fn(bayesian_oof_diagnostics_payload, oof_diagnostics_path)
+                state.artifacts["bayesian_oof_diagnostics"] = oof_diagnostics_path
+
+                fold_records = list(oof_fold_diagnostics.get("folds", []))
+                if fold_records:
+                    oof_diag_csv_path = paths.outputs_metrics / "bayesian_oof_diagnostics.csv"
+                    pd.DataFrame(fold_records).to_csv(oof_diag_csv_path, index=False)
+                    state.artifacts["bayesian_oof_diagnostics_csv"] = oof_diag_csv_path
+
                 bayesian_oof_score = pd.Series(np.nan, index=model_input_df.index, dtype="float64")
                 bayesian_oof_score.loc[bayesian_oof_subset.index] = bayesian_oof_subset.astype(float).to_numpy()
                 valid_bayes_oof_mask = bayesian_oof_score.notna()
-                if valid_bayes_oof_mask.any():
+                bayesian_evaluated_fold_count_raw = oof_fold_diagnostics.get("fold_count")
+                bayesian_evaluated_fold_count_known = bayesian_evaluated_fold_count_raw is not None
+                bayesian_evaluated_fold_count = int(bayesian_evaluated_fold_count_raw or 0)
+                bayesian_sampling_diagnostics["bayesian_evaluated_fold_count"] = int(bayesian_evaluated_fold_count)
+                bayesian_sampling_diagnostics["bayesian_evaluated_fold_count_known"] = bool(bayesian_evaluated_fold_count_known)
+                bayesian_sampling_diagnostics["bayesian_minimum_evaluated_folds"] = int(
+                    effective_cv_config.minimum_evaluated_folds
+                )
+                if (
+                    valid_bayes_oof_mask.any()
+                    and bayesian_evaluated_fold_count_known
+                    and bayesian_evaluated_fold_count >= int(effective_cv_config.minimum_evaluated_folds)
+                ):
                     bayesian_metrics = evaluate_bayesian_predictions_fn(
                         target.loc[valid_bayes_oof_mask],
                         bayesian_oof_score.loc[valid_bayes_oof_mask],
@@ -1539,6 +1556,30 @@ def run_bayesian_phase(
                     safe_write_json_fn(bayesian_metrics, paths.outputs_metrics / "bayesian_metrics.json")
                     state.artifacts["bayesian_metrics"] = paths.outputs_metrics / "bayesian_metrics.json"
                     bayesian_headline_eligible = True
+                elif valid_bayes_oof_mask.any() and not bayesian_evaluated_fold_count_known:
+                    LOGGER.warning(
+                        "Bayesian headline metrics suppressed: evaluated fold count unavailable despite OOF predictions"
+                    )
+                    state.degraded_reasons.append(
+                        {
+                            "code": "bayesian_fold_count_unknown",
+                            "minimum_required": int(effective_cv_config.minimum_evaluated_folds),
+                            "evaluated_folds": None,
+                        }
+                    )
+                elif valid_bayes_oof_mask.any():
+                    LOGGER.warning(
+                        "Bayesian headline metrics suppressed: evaluated folds=%d below minimum=%d",
+                        int(bayesian_evaluated_fold_count),
+                        int(effective_cv_config.minimum_evaluated_folds),
+                    )
+                    state.degraded_reasons.append(
+                        {
+                            "code": "bayesian_insufficient_folds",
+                            "minimum_required": int(effective_cv_config.minimum_evaluated_folds),
+                            "evaluated_folds": int(bayesian_evaluated_fold_count),
+                        }
+                    )
                 else:
                     LOGGER.warning("No Bayesian OOF predictions available; headline Bayesian metrics not produced.")
                     state.degraded_reasons.append({"code": "bayesian_no_oof_predictions"})
@@ -1550,18 +1591,43 @@ def run_bayesian_phase(
                 bayesian_diag_dir = paths.outputs_models / "bayesian" / "diagnostics"
                 bayesian_diag_dir.mkdir(parents=True, exist_ok=True)
 
-                convergence = check_convergence_fn(
-                    bayesian_idata,
-                    divergence_threshold=float(bayesian_settings_fullfit.get("divergence_warn_threshold", 0.0)),
-                    rhat_threshold=float(bayesian_settings_fullfit.get("rhat_warn_threshold", 1.05)),
-                    ess_threshold=float(bayesian_settings_fullfit.get("ess_warn_threshold", 200.0)),
-                    max_tree_depth_threshold=float(bayesian_settings_fullfit.get("max_treedepth", 12)),
-                )
-                grouped_diagnostics_frame = summarize_diagnostics_by_group(
-                    bayesian_idata,
-                    rhat_threshold=float(bayesian_settings_fullfit.get("rhat_warn_threshold", 1.05)),
-                    ess_threshold=float(bayesian_settings_fullfit.get("ess_warn_threshold", 200.0)),
-                )
+                try:
+                    convergence = check_convergence_fn(
+                        bayesian_idata,
+                        divergence_threshold=float(bayesian_settings_fullfit.get("divergence_warn_threshold", 0.0)),
+                        rhat_threshold=float(bayesian_settings_fullfit.get("rhat_warn_threshold", 1.05)),
+                        ess_threshold=float(bayesian_settings_fullfit.get("ess_warn_threshold", 200.0)),
+                        max_tree_depth_threshold=float(bayesian_settings_fullfit.get("max_treedepth", 12)),
+                    )
+                    grouped_diagnostics_frame = summarize_diagnostics_by_group(
+                        bayesian_idata,
+                        rhat_threshold=float(bayesian_settings_fullfit.get("rhat_warn_threshold", 1.05)),
+                        ess_threshold=float(bayesian_settings_fullfit.get("ess_warn_threshold", 200.0)),
+                    )
+                except Exception as convergence_error:
+                    LOGGER.warning(
+                        "Bayesian convergence diagnostics unavailable; continuing gracefully: %s",
+                        convergence_error,
+                    )
+                    convergence = {
+                        "converged": False,
+                        "divergences": float("nan"),
+                        "max_tree_depth": float("nan"),
+                        "r_hat_max": float("nan"),
+                        "ess_min": float("nan"),
+                        "diagnostics_unavailable": True,
+                        "diagnostics_error": str(convergence_error),
+                    }
+                    grouped_diagnostics_frame = pd.DataFrame(
+                        columns=["group", "n_parameters", "ess_min", "fail_rhat_count", "fail_ess_count"]
+                    )
+                    state.degraded_reasons.append(
+                        {
+                            "code": "bayesian_convergence_diagnostics_unavailable",
+                            "reason": str(convergence_error),
+                        }
+                    )
+                    bayesian_sampling_diagnostics["convergence_diagnostics_status"] = "unavailable"
                 raw_temporal_fail_fraction_threshold = bayesian_settings_fullfit.get(
                     "grouped_temporal_ess_fail_fraction_threshold",
                     0.20,
