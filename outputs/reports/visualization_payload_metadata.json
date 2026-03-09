@@ -1,6 +1,6 @@
 {
-  "run_id": "20260307T103513Z-87041b65",
-  "created_at_utc": "2026-03-08T07:28:08.135961+00:00",
+  "run_id": "20260308T105144Z-8ca480a5",
+  "created_at_utc": "2026-03-09T07:42:35.195918+00:00",
   "row_count": 84378,
   "feature_column_map": {
     "feature__municipality_id": "municipality_id",
@@ -100,29 +100,29 @@
   "comparison_table_records": [
     {
       "metric": "accuracy",
-      "baseline": 0.4309149497119422,
-      "bayesian": 0.6752270286104872,
-      "delta": 0.244312078898545,
-      "relative_delta_pct": 56.69612508497619
+      "baseline": 0.6665364710477493,
+      "bayesian": 0.7074504442925496,
+      "delta": 0.040913973244800284,
+      "relative_delta_pct": 6.138294755347197
     },
     {
       "metric": "balanced_threshold_accuracy",
       "baseline": null,
-      "bayesian": 0.38339354880708265,
+      "bayesian": 0.5404094652214952,
       "delta": null,
       "relative_delta_pct": null
     },
     {
       "metric": "balanced_threshold_f1",
       "baseline": null,
-      "bayesian": 0.435619376750283,
+      "bayesian": 0.47935103244837757,
       "delta": null,
       "relative_delta_pct": null
     },
     {
       "metric": "balanced_threshold_kappa",
       "baseline": null,
-      "bayesian": 0.03561022547071624,
+      "bayesian": 0.1587649601894623,
       "delta": null,
       "relative_delta_pct": null
     },
@@ -136,14 +136,14 @@
     {
       "metric": "balanced_threshold_precision",
       "baseline": null,
-      "bayesian": 0.292241275932366,
+      "bayesian": 0.35000807710947174,
       "delta": null,
       "relative_delta_pct": null
     },
     {
       "metric": "balanced_threshold_recall",
       "baseline": null,
-      "bayesian": 0.8551877412562873,
+      "bayesian": 0.7603228447771669,
       "delta": null,
       "relative_delta_pct": null
     },
@@ -157,84 +157,84 @@
     {
       "metric": "balanced_threshold_used",
       "baseline": null,
-      "bayesian": 0.1545,
+      "bayesian": 0.21150000000000002,
       "delta": null,
       "relative_delta_pct": null
     },
     {
       "metric": "brier",
       "baseline": null,
-      "bayesian": 0.21471627291231932,
+      "bayesian": 0.19572366449464781,
       "delta": null,
       "relative_delta_pct": null
     },
     {
       "metric": "f1",
-      "baseline": 0.4911525029103609,
-      "bayesian": 0.4336705577172503,
-      "delta": -0.05748194519311056,
-      "relative_delta_pct": -11.70348208601137
+      "baseline": 0.6078769089447698,
+      "bayesian": 0.4759187555193261,
+      "delta": -0.13195815342544365,
+      "relative_delta_pct": -21.70803849985245
     },
     {
       "metric": "false_alarm_rate",
-      "baseline": 0.7834851628032832,
-      "bayesian": 0.12956615856408407,
-      "delta": -0.6539190042391991,
-      "relative_delta_pct": -83.4628446439878
+      "baseline": 0.4346080995760801,
+      "bayesian": 0.15635428880671057,
+      "delta": -0.2782538107693695,
+      "relative_delta_pct": -64.02407388191345
     },
     {
       "metric": "kappa",
-      "baseline": 0.12560903310390326,
-      "bayesian": 0.0009979170067198062,
-      "delta": -0.12461111609718345,
-      "relative_delta_pct": -99.2055372276496
+      "baseline": 0.37318252068938196,
+      "bayesian": 0.13385665196367402,
+      "delta": -0.23932586872570794,
+      "relative_delta_pct": -64.13104994403275
     },
     {
       "metric": "lead_time_mean",
-      "baseline": 1.0614578370652692,
-      "bayesian": 0.39685564554549785,
-      "delta": -0.6646021915197713,
-      "relative_delta_pct": -62.61220825852782
+      "baseline": 1.3272987136731778,
+      "bayesian": 0.5393044306812768,
+      "delta": -0.787994282991901,
+      "relative_delta_pct": -59.36826992103374
     },
     {
       "metric": "lead_time_utility",
-      "baseline": 1.0433539780848022,
-      "bayesian": 0.33063363506431637,
-      "delta": -0.7127203430204858,
-      "relative_delta_pct": -68.31050228310501
+      "baseline": 1.2472606002858504,
+      "bayesian": 0.46736541210100047,
+      "delta": -0.7798951881848499,
+      "relative_delta_pct": -62.52864782276547
     },
     {
       "metric": "pr_auc",
       "baseline": 0.793761273169385,
-      "bayesian": 0.32098202206326343,
-      "delta": -0.4727792511061216,
-      "relative_delta_pct": -59.561894373906135
+      "bayesian": 0.44168064453642797,
+      "delta": -0.3520806286329571,
+      "relative_delta_pct": -44.355984668683206
     },
     {
       "metric": "precision",
-      "baseline": 0.3269148812521793,
-      "bayesian": 0.27862404586513784,
-      "delta": -0.048290835387041486,
-      "relative_delta_pct": -14.77168466668556
+      "baseline": 0.4517578791671407,
+      "bayesian": 0.3353276216914756,
+      "delta": -0.1164302574756651,
+      "relative_delta_pct": -25.772712075396566
     },
     {
       "metric": "recall",
-      "baseline": 0.987016025266113,
-      "bayesian": 0.9777751783834366,
-      "delta": -0.009240846882676346,
-      "relative_delta_pct": -0.9362408153590909
+      "baseline": 0.9288805708269973,
+      "bayesian": 0.8195110539244356,
+      "delta": -0.10936951690256169,
+      "relative_delta_pct": -11.774335725979094
     },
     {
       "metric": "roc_auc",
       "baseline": 0.8902388005928885,
-      "bayesian": 0.5627348033734784,
-      "delta": -0.32750399721941015,
-      "relative_delta_pct": -36.78833106367599
+      "bayesian": 0.6691739404136172,
+      "delta": -0.2210648601792713,
+      "relative_delta_pct": -24.8320855069499
     },
     {
       "metric": "threshold_used",
       "baseline": null,
-      "bayesian": 0.05,
+      "bayesian": 0.16399999999999998,
       "delta": null,
       "relative_delta_pct": null
     }
@@ -248,8 +248,8 @@
     "ess_threshold": 200.0,
     "divergences": 0.0,
     "max_tree_depth": 10.0,
-    "r_hat_max": 1.0070522941533264,
-    "ess_min": 434.5476614725909,
+    "r_hat_max": 1.0150712989456314,
+    "ess_min": 358.47334944698696,
     "n_parameters": 27856.0,
     "simplified_mode": false,
     "mode_used": "full_latent_ar",
@@ -285,11 +285,11 @@
       {
         "group": "random_effects",
         "n_parameters": 296,
-        "r_hat_max": 1.0063049236109511,
-        "r_hat_p95": 1.0055369768821778,
-        "ess_min": 434.5476614725909,
-        "ess_p05": 460.821507342543,
-        "ess_median": 1038.4595435419621,
+        "r_hat_max": 1.0150712989456314,
+        "r_hat_p95": 1.0123885937311248,
+        "ess_min": 358.47334944698696,
+        "ess_p05": 412.4340539586018,
+        "ess_median": 807.6059516241183,
         "fail_rhat_count": 0,
         "fail_ess_count": 0,
         "rhat_threshold": 1.05,
@@ -298,11 +298,11 @@
       {
         "group": "fixed_effects",
         "n_parameters": 5,
-        "r_hat_max": 1.0014258317078357,
-        "r_hat_p95": 1.001306868835378,
-        "ess_min": 8446.866513779847,
-        "ess_p05": 8503.33856318993,
-        "ess_median": 9290.556175230862,
+        "r_hat_max": 1.0019814964826612,
+        "r_hat_p95": 1.0018192484336048,
+        "ess_min": 6369.216558668167,
+        "ess_p05": 6405.299292139079,
+        "ess_median": 6641.601075215676,
         "fail_rhat_count": 0,
         "fail_ess_count": 0,
         "rhat_threshold": 1.05,
@@ -311,11 +311,11 @@
       {
         "group": "temporal_state",
         "n_parameters": 13778,
-        "r_hat_max": 1.005019638859202,
-        "r_hat_p95": 1.0027926415394592,
-        "ess_min": 984.6528818425346,
-        "ess_p05": 1246.491681840573,
-        "ess_median": 6007.61819359778,
+        "r_hat_max": 1.0116758420622258,
+        "r_hat_p95": 1.0053433434077033,
+        "ess_min": 762.4179572999142,
+        "ess_p05": 979.1463888797239,
+        "ess_median": 4563.797102934949,
         "fail_rhat_count": 0,
         "fail_ess_count": 0,
         "rhat_threshold": 1.05,
@@ -324,11 +324,11 @@
       {
         "group": "likelihood",
         "n_parameters": 1,
-        "r_hat_max": 1.0011335528071377,
-        "r_hat_p95": 1.0011335528071377,
-        "ess_min": 12849.646813550642,
-        "ess_p05": 12849.646813550642,
-        "ess_median": 12849.646813550642,
+        "r_hat_max": 1.0010241548811847,
+        "r_hat_p95": 1.0010241548811847,
+        "ess_min": 10908.054429698379,
+        "ess_p05": 10908.054429698379,
+        "ess_median": 10908.054429698379,
         "fail_rhat_count": 0,
         "fail_ess_count": 0,
         "rhat_threshold": 1.05,
@@ -337,11 +337,11 @@
       {
         "group": "other",
         "n_parameters": 13776,
-        "r_hat_max": 1.0070522941533264,
-        "r_hat_p95": 1.0026110476809744,
-        "ess_min": 1298.1488794224915,
-        "ess_p05": 12808.778180386886,
-        "ess_median": 14866.875078321804,
+        "r_hat_max": 1.0074605168431001,
+        "r_hat_p95": 1.002351551590284,
+        "ess_min": 1119.0293114630103,
+        "ess_p05": 9290.640546772445,
+        "ess_median": 10911.173990575908,
         "fail_rhat_count": 0,
         "fail_ess_count": 0,
         "rhat_threshold": 1.05,
@@ -367,21 +367,21 @@
   "covariate_hdi_records": [
     {
       "covariate": "temperature",
-      "mean": 0.04876368432345174,
-      "hdi_low": 0.013308586630973689,
-      "hdi_high": 0.08452577931335217
+      "mean": 0.04867849081843137,
+      "hdi_low": 0.013910551816999388,
+      "hdi_high": 0.08383030485477555
     },
     {
       "covariate": "rainfall",
-      "mean": -0.03654266922274535,
-      "hdi_low": -0.06007465763160388,
-      "hdi_high": -0.013586508026901452
+      "mean": -0.03663929644650945,
+      "hdi_low": -0.059510854635314345,
+      "hdi_high": -0.012931123308796345
     },
     {
       "covariate": "humidity",
-      "mean": 0.18325429077836922,
-      "hdi_low": 0.14846072004896413,
-      "hdi_high": 0.2176577828006818
+      "mean": 0.18328467964785053,
+      "hdi_low": 0.14818009944478058,
+      "hdi_high": 0.2186003528227439
     }
   ],
   "payload_csv_path": "/home/priyodip/chikungunya-early-warningV4-Brazil-/outputs/reports/visualization_payload.csv"

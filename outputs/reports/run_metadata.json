@@ -1,6 +1,6 @@
 {
-  "run_id": "20260307T103513Z-87041b65",
-  "started_at_utc": "2026-03-07T10:35:13.469246+00:00",
+  "run_id": "20260308T105144Z-8ca480a5",
+  "started_at_utc": "2026-03-08T10:51:44.057652+00:00",
   "effective_seed": 42,
   "model_config_path": "config/model_config.yaml",
   "adapter_config_path": "projects/brazil_chik/config.yaml",
@@ -133,7 +133,7 @@
             {
               "source": "nvidia-smi -L",
               "returncode": 0,
-              "stdout": "GPU 0: NVIDIA L4 (UUID: GPU-df1e441c-bf40-45c5-41d8-7f8cf58a3d7c)"
+              "stdout": "GPU 0: NVIDIA L4 (UUID: GPU-e31b7b90-45cf-685f-3afc-7869e0161d66)"
             }
           ]
         }
@@ -221,7 +221,7 @@
       "log_level": "INFO",
       "seed": null
     },
-    "git_commit_sha": "7e4017d8e4381f65855be864a34607b213f8dcaa",
+    "git_commit_sha": "46896459d8af69dc24ffda4b50635378df158179",
     "python_version": "3.10.17 | packaged by conda-forge | (main, Apr 10 2025, 22:19:12) [GCC 13.3.0]",
     "input_hashes_sha256": {
       "raw_data": "ba9c822d223e818e46680deab043da86dddefdd5373c5bb68eb358f3345b46ac",

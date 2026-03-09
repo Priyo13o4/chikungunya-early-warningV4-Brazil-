@@ -1,5 +1,5 @@
 {
-  "run_id": "20260307T103513Z-87041b65",
+  "run_id": "20260308T105144Z-8ca480a5",
   "headline_eligible": true,
   "degraded": false,
   "converged": true,
@@ -168,16 +168,16 @@
     "sample_size": 30723,
     "optimized": true,
     "method": "empirical_cost_loss_oof",
-    "threshold": 0.05
+    "threshold": 0.16399999999999998
   },
   "bayesian_balanced_threshold_sweep": {
     "enabled": true,
     "sample_size": 30723,
     "optimized": true,
     "method": "empirical_balanced_oof",
-    "threshold": 0.1545,
-    "f1": 0.435619376750283,
-    "accuracy": 0.38339354880708265,
+    "threshold": 0.21150000000000002,
+    "f1": 0.47935103244837757,
+    "accuracy": 0.5404094652214952,
     "objective_primary": "f1",
     "objective_tiebreaker": "accuracy",
     "grid_size": 101,
