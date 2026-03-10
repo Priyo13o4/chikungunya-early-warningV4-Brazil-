@@ -329,16 +329,23 @@ def train_baselines(
             fold_dir = output_root / f"fold_{fold_id}"
             fold_dir.mkdir(parents=True, exist_ok=True)
 
-            train_positions = np.asarray(train_idx, dtype=int)
-            valid_positions = np.asarray(valid_idx, dtype=int)
+            train_labels = pd.Index(train_idx)
+            valid_labels = pd.Index(valid_idx)
+            train_positions = X.index.get_indexer(train_labels)
+            valid_positions = X.index.get_indexer(valid_labels)
+            if (train_positions < 0).any() or (valid_positions < 0).any():
+                raise RuntimeError(
+                    f"Fold index alignment failed for fold={fold_id}; received labels not present in training frame index"
+                )
 
             purged_train_rows = 0
             if fold_future_cases is not None and fold_forward_positions is not None and train_positions.size and valid_positions.size:
                 valid_position_set = set(int(value) for value in valid_positions.tolist())
-                forward_for_train = pd.to_numeric(fold_forward_positions.iloc[train_positions], errors="coerce")
+                forward_for_train = pd.to_numeric(fold_forward_positions.loc[train_labels], errors="coerce")
                 purge_mask = forward_for_train.isin(valid_position_set).to_numpy(dtype=bool)
                 purged_train_rows = int(purge_mask.sum())
                 if purged_train_rows > 0:
+                    train_labels = train_labels[~purge_mask]
                     train_positions = train_positions[~purge_mask]
             LOGGER.info(
                 "Baseline CV fold %d/%d purge guard | horizon_steps=%d, purged_train_rows=%d, rows_train_after_purge=%d",
@@ -349,10 +356,10 @@ def train_baselines(
                 int(len(train_positions)),
             )
 
-            X_train = X.iloc[train_positions]
-            X_valid = X.iloc[valid_positions]
-            y_train = y.iloc[train_positions]
-            y_valid = y.iloc[valid_positions]
+            X_train = X.loc[train_labels]
+            X_valid = X.loc[valid_labels]
+            y_train = y.loc[train_labels]
+            y_valid = y.loc[valid_labels]
 
             if fold_local_climate_imputation:
                 X_train, X_valid = _impute_fold_climate_features(X_train, X_valid)
@@ -367,7 +374,7 @@ def train_baselines(
                     selected_percentile=int(selected_percentile),
                 )
 
-            valid_index = X.index.take(valid_positions)
+            valid_index = valid_labels
 
             if pd.to_numeric(y_train, errors="coerce").dropna().nunique() <= 1:
                 folds_skipped_single_class += 1

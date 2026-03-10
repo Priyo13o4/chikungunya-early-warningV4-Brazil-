@@ -34,12 +34,24 @@ _DISTRIBUTION_FIT_TOKENS: tuple[str, ...] = (
     "boxcox",
     "yeojohnson",
 )
+_CLIMATE_COLUMN_TOKENS: tuple[str, ...] = ("rain", "temp", "humid", "precip", "climate", "lai", "month", "week", "year")
+_BASELINE_CLIMATE_REQUIRED_CONTEXT_COLUMNS: tuple[str, ...] = ("date", "year", "month", "weekofyear", "district")
+_REQUESTED_COVARIATE_ALIAS_TOKENS: dict[str, tuple[str, ...]] = {
+    "rainfall": ("rain", "precip"),
+    "precipitation": ("rain", "precip"),
+    "temperature": ("temp",),
+    "humidity": ("humid", "umid"),
+    "month_sin": ("month",),
+    "month_cos": ("month",),
+}
 
 
 def build_model_input_df(
     feature_df: pd.DataFrame,
     *,
     target_column: str = "outbreak_label",
+    climate_only: bool = False,
+    requested_covariates: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     dropped: list[str] = []
     for column in feature_df.columns:
@@ -51,10 +63,50 @@ def build_model_input_df(
             dropped.append(column)
 
     output = feature_df.drop(columns=sorted(set(dropped)), errors="ignore").copy()
+
+    requested_covariates = [str(value).strip() for value in (requested_covariates or []) if str(value).strip()]
+    dropped_non_climate_columns: list[str] = []
+    selected_climate_columns: list[str] = []
+    if climate_only:
+        requested_lookup = {name.lower() for name in requested_covariates}
+        selected: list[str] = []
+        for column in output.columns:
+            lowered = str(column).lower()
+            if requested_lookup:
+                if lowered in requested_lookup:
+                    selected.append(str(column))
+                    continue
+                requested_alias_hit = False
+                for requested_name in requested_lookup:
+                    alias_tokens = _REQUESTED_COVARIATE_ALIAS_TOKENS.get(requested_name, ())
+                    if alias_tokens and any(token in lowered for token in alias_tokens):
+                        requested_alias_hit = True
+                        break
+                if requested_alias_hit:
+                    selected.append(str(column))
+                continue
+            if any(token in lowered for token in _CLIMATE_COLUMN_TOKENS):
+                selected.append(str(column))
+        if requested_lookup and not selected:
+            for column in output.columns:
+                lowered = str(column).lower()
+                if any(token in lowered for token in _CLIMATE_COLUMN_TOKENS):
+                    selected.append(str(column))
+        for context_column in _BASELINE_CLIMATE_REQUIRED_CONTEXT_COLUMNS:
+            if context_column in output.columns:
+                selected.append(context_column)
+        selected_climate_columns = sorted(set(selected))
+        dropped_non_climate_columns = sorted([str(column) for column in output.columns if str(column) not in set(selected_climate_columns)])
+        output = output.loc[:, selected_climate_columns].copy()
+
     audit = {
         "input_feature_count": int(feature_df.shape[1]),
         "output_feature_count": int(output.shape[1]),
         "dropped_forbidden_columns": sorted(set(dropped)),
+        "climate_only_filter_enabled": bool(climate_only),
+        "climate_only_requested_covariates": requested_covariates,
+        "climate_only_selected_columns": selected_climate_columns,
+        "dropped_non_climate_columns": dropped_non_climate_columns,
         "forbidden_patterns": [pattern.pattern for pattern in _FORBIDDEN_COLUMN_PATTERNS],
         "raw_case_aliases": sorted(_RAW_CASE_TARGET_ALIASES),
     }
@@ -285,6 +337,8 @@ def run_baseline_phase(
     skip_baselines: bool,
     export_detailed_csv: bool,
     model_names: list[str] | None,
+    baseline_climate_only: bool = False,
+    baseline_requested_covariates: list[str] | None = None,
     lead_time_max_lookback_steps: int,
     threshold_scope_audit: dict[str, Any],
     cv_ledger_callable: Callable[..., Any],
@@ -311,7 +365,18 @@ def run_baseline_phase(
     temporal_index = labeled_df.get("date")
     district_index = labeled_df.get("district")
 
-    model_input_df, leakage_audit = build_model_input_df(features_df, target_column="outbreak_label")
+    model_input_df, leakage_audit = build_model_input_df(
+        features_df,
+        target_column="outbreak_label",
+        climate_only=bool(baseline_climate_only),
+        requested_covariates=baseline_requested_covariates or [],
+    )
+    if baseline_climate_only and model_input_df.shape[1] == 0:
+        message = "Baseline climate-only mode selected no usable covariates; cannot train baselines."
+        if strict_feature_gate:
+            raise RuntimeError(message)
+        LOGGER.warning(message)
+        state.degraded_reasons.append({"code": "baseline_climate_only_empty_covariates"})
 
     def _align_to_model_input(series: pd.Series | None) -> pd.Series | None:
         if series is None:

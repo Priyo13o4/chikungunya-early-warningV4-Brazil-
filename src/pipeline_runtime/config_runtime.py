@@ -81,8 +81,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional population/census path (CSV/XLS/XLSX) for merge stage; auto-discovered from data/raw when omitted",
     )
-    parser.add_argument("--start-year", type=int, default=2009, help="Start year for cleaning/filtering")
-    parser.add_argument("--end-year", type=int, default=2019, help="End year for cleaning/filtering")
+    parser.add_argument("--start-year", type=int, default=2015, help="Start year for cleaning/filtering (thesis default: 2015)")
+    parser.add_argument("--end-year", type=int, default=2020, help="End year for cleaning/filtering (thesis default: 2020, pre-COVID)")
     parser.add_argument("--selected-percentile", type=int, default=75, help="District percentile used for canonical outbreak_label")
     parser.add_argument("--skip-baselines", action="store_true", help="Skip baseline model training/prediction")
     parser.add_argument("--skip-bayesian", action="store_true", help="Skip Bayesian model track")
@@ -156,6 +156,15 @@ def parse_args() -> argparse.Namespace:
             "Baseline model names/aliases to train. "
             "If omitted, uses config/model_config.yaml baseline_models; "
             f"default suite: {', '.join(default_baseline_models)}"
+        ),
+    )
+    parser.add_argument(
+        "--baseline-climate-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Restrict baseline training inputs to Bayesian climate covariates only "
+            "(fairness handicap against Track B)."
         ),
     )
     parser.add_argument(

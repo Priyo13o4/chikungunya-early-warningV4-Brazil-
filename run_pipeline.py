@@ -644,6 +644,7 @@ def run(
     bayesian_profile_mode: str | None = None,
     export_detailed_csv: bool = False,
     model_names: list[str] | None = None,
+    baseline_climate_only: bool = False,
     seed: int | None = None,
     cli_args_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Path]:
@@ -750,6 +751,9 @@ def run(
     )
     bayesian_settings_cv["sampling_backend"] = runtime_config.normalize_sampling_backend(
         bayesian_settings_cv.get("sampling_backend", "auto")
+    )
+    baseline_requested_covariates = list(
+        runtime_config.resolve_bayesian_climate_covariates(bayesian_settings=bayesian_settings_fullfit)
     )
 
     cv_subset_mode_active = False
@@ -1127,6 +1131,8 @@ def run(
         skip_baselines=skip_baselines,
         export_detailed_csv=export_detailed_csv,
         model_names=model_names,
+        baseline_climate_only=bool(baseline_climate_only),
+        baseline_requested_covariates=baseline_requested_covariates,
         lead_time_max_lookback_steps=lead_time_max_lookback_steps,
         threshold_scope_audit=threshold_scope_audit,
         cv_ledger_callable=cv_ledger_callable,
@@ -1458,6 +1464,7 @@ def main() -> None:
         enable_bayesian_profiles=args.enable_bayesian_profiles,
         export_detailed_csv=args.export_detailed_csv,
         model_names=args.model_names,
+        baseline_climate_only=args.baseline_climate_only,
         seed=args.seed,
         cli_args_snapshot=vars(args),
     )
