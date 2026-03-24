@@ -76,6 +76,7 @@ outputs/models/**/*.pt
 outputs/models/**/*.pth
 outputs/models/**/*.h5
 outputs/models/**/*.npz
+outputs/models/bayesian/posterior/fullfit_idata.nc
 
 # Compiled extensions
 *.so

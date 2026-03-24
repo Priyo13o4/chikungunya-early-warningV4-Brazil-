@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from src.models.bayesian.diagnostics import summarize_diagnostics_by_group
+from src.models.bayesian.posterior_export import export_inferencedata_artifacts
 from src.models.baselines.cv_splitter import TimeSeriesCVConfig, generate_time_splits
 from src.pipeline_runtime.config_runtime import (
     build_bayesian_config,
@@ -1590,6 +1591,26 @@ def run_bayesian_phase(
             if bayesian_idata is not None:
                 bayesian_diag_dir = paths.outputs_models / "bayesian" / "diagnostics"
                 bayesian_diag_dir.mkdir(parents=True, exist_ok=True)
+
+                if bool(bayesian_settings_fullfit.get("posterior_persistence_enabled", True)):
+                    raw_posterior_dir = str(
+                        bayesian_settings_fullfit.get("posterior_persistence_dir", "posterior")
+                    ).strip() or "posterior"
+                    posterior_dir = Path(raw_posterior_dir)
+                    if not posterior_dir.is_absolute():
+                        posterior_dir = paths.outputs_models / "bayesian" / posterior_dir
+                    posterior_artifacts = export_inferencedata_artifacts(
+                        bayesian_idata,
+                        output_dir=posterior_dir,
+                        prefix="fullfit",
+                        export_idata_netcdf=bool(
+                            bayesian_settings_fullfit.get("posterior_export_idata_netcdf", True)
+                        ),
+                        export_summary_csv=bool(
+                            bayesian_settings_fullfit.get("posterior_export_summary_csv", True)
+                        ),
+                    )
+                    state.artifacts.update(posterior_artifacts)
 
                 try:
                     convergence = check_convergence_fn(

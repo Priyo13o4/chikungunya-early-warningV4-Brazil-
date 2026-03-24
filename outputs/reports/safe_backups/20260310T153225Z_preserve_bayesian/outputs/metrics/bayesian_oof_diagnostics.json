@@ -1,0 +1,37 @@
+{
+  "run_id": "20260308T105144Z-8ca480a5",
+  "oof_execution_mode_requested": "conditional",
+  "oof_execution_mode_effective": "conditional",
+  "oof_rerun_simplified": false,
+  "selected_percentile": 75,
+  "minimum_evaluated_folds": 3,
+  "fold_count_known": true,
+  "fold_count": 4,
+  "ess_first": null,
+  "ess_last": null,
+  "ess_improved": false,
+  "ess_threshold": 200.0,
+  "any_nan": false,
+  "folds": [
+    {
+      "fold_number": 1,
+      "n_train": 15288,
+      "n_valid": 7791
+    },
+    {
+      "fold_number": 2,
+      "n_train": 23079,
+      "n_valid": 7644
+    },
+    {
+      "fold_number": 3,
+      "n_train": 30723,
+      "n_valid": 7644
+    },
+    {
+      "fold_number": 4,
+      "n_train": 30723,
+      "n_valid": 7644
+    }
+  ]
+}

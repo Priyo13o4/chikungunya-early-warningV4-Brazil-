@@ -2,6 +2,16 @@
   "input_feature_count": 42,
   "output_feature_count": 42,
   "dropped_forbidden_columns": [],
+  "climate_only_filter_enabled": false,
+  "climate_only_requested_covariates": [
+    "month_sin",
+    "month_cos",
+    "rainfall",
+    "temperature",
+    "humidity"
+  ],
+  "climate_only_selected_columns": [],
+  "dropped_non_climate_columns": [],
   "forbidden_patterns": [
     "^outbreak_label$",
     "^outbreak_label_.*$",

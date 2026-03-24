@@ -41,6 +41,80 @@ def plot_trace(
     return path
 
 
+def extract_posterior_predictive_samples_from_idata(
+    inference_data: object | None,
+    *,
+    expected_observations: int | None = None,
+    var_candidates: Sequence[str] | None = None,
+    max_draws: int | None = None,
+    random_seed: int = 42,
+) -> np.ndarray | None:
+    """Extract posterior predictive draws as a 2D matrix (samples x observations)."""
+    if inference_data is None:
+        return None
+
+    candidate_names = list(var_candidates or ("cases_obs", "cases", "y_obs", "y", "obs", "outcome"))
+
+    for group_name in ("posterior_predictive", "predictions"):
+        group = getattr(inference_data, group_name, None)
+        if group is None:
+            continue
+
+        data_vars = list(getattr(group, "data_vars", {}).keys())
+        ordered_vars = [name for name in candidate_names if name in data_vars] + [name for name in data_vars if name not in candidate_names]
+
+        for var_name in ordered_vars:
+            try:
+                data_array = group[var_name]
+                values = np.asarray(data_array.to_numpy(), dtype=float)
+            except Exception:
+                continue
+
+            if values.ndim == 0:
+                continue
+
+            dims = list(getattr(data_array, "dims", ()))
+            obs_axis = None
+            if expected_observations is not None:
+                for axis, size in enumerate(values.shape):
+                    if int(size) == int(expected_observations):
+                        obs_axis = axis
+                        break
+            if obs_axis is None and dims:
+                for axis, dim_name in enumerate(dims):
+                    dim_lower = str(dim_name).lower()
+                    if "obs" in dim_lower or "time" in dim_lower:
+                        obs_axis = axis
+                        break
+            if obs_axis is None:
+                obs_axis = values.ndim - 1
+
+            values = np.moveaxis(values, obs_axis, -1)
+            if values.ndim == 1:
+                samples = values.reshape(1, -1)
+            else:
+                samples = values.reshape(-1, values.shape[-1])
+
+            if samples.size == 0:
+                continue
+
+            if expected_observations is not None and samples.shape[1] != int(expected_observations):
+                if samples.shape[1] > int(expected_observations):
+                    samples = samples[:, : int(expected_observations)]
+                else:
+                    continue
+
+            if max_draws is not None and samples.shape[0] > int(max_draws):
+                rng = np.random.default_rng(int(random_seed))
+                chosen = np.sort(rng.choice(samples.shape[0], size=int(max_draws), replace=False))
+                samples = samples[chosen, :]
+
+            if np.isfinite(samples).any():
+                return samples
+
+    return None
+
+
 def plot_posterior_predictive_check(
     y_true: Sequence[float] | pd.Series,
     posterior_predictive_samples: np.ndarray,

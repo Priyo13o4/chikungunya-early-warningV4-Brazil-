@@ -1,0 +1,11 @@
+{
+  "requested_mode": "auto",
+  "used_mode": "full_latent_ar",
+  "force_full_bayesian": false,
+  "simplified_mode": false,
+  "fallback_used": false,
+  "degraded_mode": false,
+  "threshold_basis": "provided_series",
+  "threshold_column": null,
+  "threshold_default": 1.0
+}

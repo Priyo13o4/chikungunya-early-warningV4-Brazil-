@@ -1307,6 +1307,7 @@ def run(
 
     _phase_start("visualization_payload")
     bayesian_convergence_path = state.artifacts.get("bayesian_convergence")
+    bayesian_idata_path = state.artifacts.get("bayesian_posterior_idata")
     payload_csv_path, payload_metadata_path = runtime_visualization.build_visualization_payload(
         paths=paths,
         run_id=run_id,
@@ -1316,6 +1317,7 @@ def run(
         bayesian_result=bayesian_result,
         eval_decision_result=eval_decision_result,
         bayesian_convergence_path=bayesian_convergence_path,
+        bayesian_idata_path=bayesian_idata_path,
         safe_write_json_fn=_safe_write_json,
     )
     state.artifacts["visualization_payload_csv"] = payload_csv_path

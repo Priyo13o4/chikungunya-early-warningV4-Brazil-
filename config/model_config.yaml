@@ -47,6 +47,10 @@ bayesian_model:
   outbreak_threshold_default_cases: 1.0
   posterior_sample_cap: 500
   predictive_chunk_rows: 4000
+  posterior_persistence_enabled: true
+  posterior_persistence_dir: posterior
+  posterior_export_idata_netcdf: true
+  posterior_export_summary_csv: true
   mechanistic_boundary_policy: lagged_1
 
 feature_engineering:

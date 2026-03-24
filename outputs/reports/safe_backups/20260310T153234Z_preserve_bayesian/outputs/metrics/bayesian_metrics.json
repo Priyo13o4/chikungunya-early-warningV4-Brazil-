@@ -1,0 +1,22 @@
+{
+  "accuracy": 0.7074504442925496,
+  "precision": 0.3353276216914756,
+  "recall": 0.8195110539244356,
+  "f1": 0.4759187555193261,
+  "kappa": 0.13385665196367402,
+  "brier": 0.19572366449464781,
+  "false_alarm_rate": 0.15635428880671057,
+  "roc_auc": 0.6691739404136172,
+  "pr_auc": 0.44168064453642797,
+  "lead_time_mean": 0.5393044306812768,
+  "lead_time_utility": 0.46736541210100047,
+  "threshold_used": 0.16399999999999998,
+  "balanced_threshold_used": 0.21150000000000002,
+  "balanced_threshold_optimized": true,
+  "balanced_threshold_sample_size": 30723,
+  "balanced_threshold_accuracy": 0.5404094652214952,
+  "balanced_threshold_precision": 0.35000807710947174,
+  "balanced_threshold_recall": 0.7603228447771669,
+  "balanced_threshold_f1": 0.47935103244837757,
+  "balanced_threshold_kappa": 0.1587649601894623
+}

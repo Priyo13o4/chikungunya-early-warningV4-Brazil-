@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import importlib
 import json
 import logging
 from pathlib import Path
@@ -12,6 +13,7 @@ import pandas as pd
 from src.evaluation.metrics_baselines import lead_time_steps
 from src.pipeline_runtime.phase_context import BaselinePhaseResult, BayesianPhaseResult, EvalDecisionPhaseResult
 from src.visualization.diagnostic_plots import (
+    extract_posterior_predictive_samples_from_idata,
     plot_convergence_comparison,
     plot_posterior_predictive_check,
     plot_residuals,
@@ -174,6 +176,7 @@ def _collect_payload_inputs(
     eval_decision_result: EvalDecisionPhaseResult,
     bayesian_convergence_path: Path | None,
     bayesian_idata: Any | None = None,
+    bayesian_idata_path: Path | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     payload = pd.DataFrame(index=labeled_df.index)
     payload["run_id"] = run_id
@@ -243,6 +246,7 @@ def _collect_payload_inputs(
         "comparison_table_records": comparison_table_records,
         "bayesian_convergence_path": str(bayesian_convergence_path) if bayesian_convergence_path is not None else None,
         "bayesian_convergence": bayesian_convergence_payload,
+        "bayesian_idata_path": str(bayesian_idata_path) if bayesian_idata_path is not None else None,
         "covariate_hdi_records": _extract_covariate_hdi_records_from_idata(bayesian_idata),
     }
     return payload, payload_metadata
@@ -258,6 +262,7 @@ def build_visualization_payload(
     bayesian_result: BayesianPhaseResult,
     eval_decision_result: EvalDecisionPhaseResult,
     bayesian_convergence_path: Path | None = None,
+    bayesian_idata_path: Path | None = None,
     safe_write_json_fn: Callable[[dict[str, Any], Path], None],
 ) -> tuple[Path, Path]:
     payload_frame, payload_metadata = _collect_payload_inputs(
@@ -269,6 +274,7 @@ def build_visualization_payload(
         eval_decision_result=eval_decision_result,
         bayesian_convergence_path=bayesian_convergence_path,
         bayesian_idata=bayesian_result.bayesian_idata,
+        bayesian_idata_path=bayesian_idata_path,
     )
 
     payload_csv_path = paths.outputs_reports / "visualization_payload.csv"
@@ -295,6 +301,29 @@ def _safe_plot(plot_label: str, plot_callable: Callable[..., Any], generated: di
 
     if isinstance(plot_result, Path):
         generated[artifact_key] = plot_result
+
+
+def _load_persisted_idata_from_metadata(payload_metadata: dict[str, Any]) -> Any | None:
+    raw_path = payload_metadata.get("bayesian_idata_path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+
+    idata_path = Path(raw_path)
+    if not idata_path.exists():
+        LOGGER.warning("Persisted Bayesian idata path does not exist: %s", idata_path)
+        return None
+
+    try:
+        az = importlib.import_module("arviz")
+    except Exception as import_error:
+        LOGGER.warning("Unable to import arviz for persisted idata loading: %s", import_error)
+        return None
+
+    try:
+        return az.from_netcdf(str(idata_path))
+    except Exception as load_error:
+        LOGGER.warning("Unable to load persisted Bayesian idata from %s: %s", idata_path, load_error)
+        return None
 
 
 def _build_metric_vectors(payload_frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -387,6 +416,10 @@ def _run_visualizations_from_payload(
             output_dir=output_dir,
         )
 
+    bayesian_idata = payload_metadata.get("bayesian_idata")
+    if bayesian_idata is None:
+        bayesian_idata = _load_persisted_idata_from_metadata(payload_metadata)
+
     y_true_valid, y_score_valid, y_pred_valid = _build_metric_vectors(payload_frame)
     if len(y_true_valid) > 1:
         _safe_plot(
@@ -400,17 +433,31 @@ def _run_visualizations_from_payload(
             output_dir=output_dir,
         )
 
-        track_b_array = y_score_valid.to_numpy(dtype=float)
-        if track_b_array.size == 0:
-            posterior_predictive_samples = np.zeros((1, 1), dtype=float)
+        posterior_predictive_samples = extract_posterior_predictive_samples_from_idata(
+            bayesian_idata,
+            expected_observations=None,
+            max_draws=250,
+            random_seed=int(effective_seed),
+        )
+        if posterior_predictive_samples is None:
+            track_b_array = y_score_valid.to_numpy(dtype=float)
+            if track_b_array.size == 0:
+                posterior_predictive_samples = np.zeros((1, 1), dtype=float)
+            else:
+                max_points = 10000
+                if track_b_array.size > max_points:
+                    rng = np.random.default_rng(int(effective_seed))
+                    sampled_idx = np.sort(rng.choice(track_b_array.size, size=max_points, replace=False))
+                    track_b_array = track_b_array[sampled_idx]
+                sample_count = 25
+                posterior_predictive_samples = np.broadcast_to(track_b_array, (sample_count, track_b_array.size))
+            LOGGER.info("Posterior predictive source: fallback broadcast from score vector")
         else:
-            max_points = 10000
-            if track_b_array.size > max_points:
-                rng = np.random.default_rng(int(effective_seed))
-                sampled_idx = np.sort(rng.choice(track_b_array.size, size=max_points, replace=False))
-                track_b_array = track_b_array[sampled_idx]
-            sample_count = 25
-            posterior_predictive_samples = np.broadcast_to(track_b_array, (sample_count, track_b_array.size))
+            LOGGER.info(
+                "Posterior predictive source: Bayesian idata (%d samples x %d observations)",
+                int(posterior_predictive_samples.shape[0]),
+                int(posterior_predictive_samples.shape[1]),
+            )
 
         _safe_plot(
             "Posterior predictive check plot",
@@ -668,7 +715,6 @@ def _run_visualizations_from_payload(
             output_dir=output_dir,
         )
 
-    bayesian_idata = payload_metadata.get("bayesian_idata")
     covariate_hdi_records = payload_metadata.get("covariate_hdi_records", [])
     if bayesian_idata is not None:
         _safe_plot(

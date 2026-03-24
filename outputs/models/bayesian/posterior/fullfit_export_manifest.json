@@ -1,0 +1,10 @@
+{
+  "prefix": "fullfit",
+  "export_idata_netcdf": true,
+  "export_summary_csv": true,
+  "artifacts": {
+    "bayesian_posterior_idata": "/home/priyodip/chikungunya-early-warningV4-Brazil-/outputs/models/bayesian/posterior/fullfit_idata.nc",
+    "bayesian_posterior_summary": "/home/priyodip/chikungunya-early-warningV4-Brazil-/outputs/models/bayesian/posterior/fullfit_posterior_summary.csv"
+  },
+  "errors": []
+}
